@@ -31,7 +31,6 @@ PORT=8000
 ALLOWED_ORIGINS=http://localhost:5173
 DATABASE_URL=
 SQLITE_DB_FILE=backend/data/timetable.db
-TEACHER_REGISTRATION_CODE=
 ```
 
 Backend читает переменные из:
@@ -59,6 +58,7 @@ Backend читает переменные из:
 
 - публичная регистрация доступна только для `student` и `teacher`
 - `admin` через публичную регистрацию создать нельзя
-- для регистрации `teacher` нужен `TEACHER_REGISTRATION_CODE`
-- для входа `teacher` также нужен `TEACHER_REGISTRATION_CODE`
+- для регистрации `teacher` нужен персональный код, выданный университетом
+- этот `teacher_code` сохраняется в таблице `users`
+- для входа `teacher` должен ввести тот же самый код
 - при логине выбранная роль должна совпадать с ролью аккаунта

@@ -68,6 +68,7 @@ def default_store():
                 "displayName": "System Admin",
                 "role": "admin",
                 "token": "seed-admin-token",
+                "teacherCode": None,
             },
             {
                 "email": "teacher@university.kz",
@@ -75,6 +76,7 @@ def default_store():
                 "displayName": "Default Teacher",
                 "role": "teacher",
                 "token": "seed-teacher-token",
+                "teacherCode": "TEACHER-DEMO-001",
             },
             {
                 "email": "student@university.kz",
@@ -82,6 +84,7 @@ def default_store():
                 "displayName": "Default Student",
                 "role": "student",
                 "token": "seed-student-token",
+                "teacherCode": None,
             },
         ],
         "courses": [
@@ -253,8 +256,8 @@ def seed_from_store(connection, store):
         db_execute(
             connection,
             """
-            INSERT INTO users (email, password, display_name, role, token)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users (email, password, display_name, role, token, teacher_code)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 user["email"],
@@ -262,6 +265,7 @@ def seed_from_store(connection, store):
                 user["displayName"],
                 user["role"],
                 user["token"],
+                user.get("teacherCode"),
             ),
         )
 
@@ -364,7 +368,8 @@ def sqlite_schema():
             password TEXT NOT NULL,
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
-            token TEXT NOT NULL
+            token TEXT NOT NULL,
+            teacher_code TEXT
         )
         """,
         """
@@ -425,7 +430,8 @@ def postgres_schema():
             password TEXT NOT NULL,
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
-            token TEXT NOT NULL
+            token TEXT NOT NULL,
+            teacher_code TEXT
         )
         """,
         """
@@ -482,6 +488,7 @@ def ensure_database():
         schema = postgres_schema() if DB_ENGINE == "postgres" else sqlite_schema()
         for statement in schema:
             db_execute(connection, statement)
+        ensure_users_schema(connection)
         connection.commit()
 
         counts = {
@@ -494,6 +501,29 @@ def ensure_database():
                 return
             seed_from_store(connection, default_store())
             connection.commit()
+
+
+def ensure_users_schema(connection):
+    try:
+        db_execute(connection, "ALTER TABLE users ADD COLUMN teacher_code TEXT")
+    except Exception as exc:
+        if exc.__class__.__name__ not in {
+            "OperationalError",
+            "DuplicateColumn",
+            "DuplicateColumnError",
+            "ProgrammingError",
+        }:
+            raise
+
+    db_execute(
+        connection,
+        """
+        UPDATE users
+        SET teacher_code = ?
+        WHERE lower(email) = lower(?) AND role = ? AND (teacher_code IS NULL OR teacher_code = '')
+        """,
+        ("TEACHER-DEMO-001", "teacher@university.kz", "teacher"),
+    )
 
 
 def list_collection(connection, collection, query):
@@ -1073,15 +1103,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise ValueError(f"Заполните поля: {', '.join(missing)}")
 
         role = (payload.get("role") or "student").strip().lower()
+        teacher_code = (payload.get("teacherCode") or "").strip()
         if role not in {"student", "teacher"}:
             raise ValueError("Можно зарегистрироваться только как студент или преподаватель")
 
         if role == "teacher":
-            teacher_code = (payload.get("teacherCode") or "").strip()
-            if not TEACHER_REGISTRATION_CODE:
-                raise ValueError("Регистрация преподавателей временно недоступна")
-            if teacher_code != TEACHER_REGISTRATION_CODE:
-                raise ValueError("Неверный код преподавателя")
+            if not teacher_code:
+                raise ValueError("Введите код преподавателя, выданный университетом")
 
         with DB_LOCK:
             with get_connection() as connection:
@@ -1093,12 +1121,24 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if existing:
                     raise ValueError("Пользователь с таким email уже существует")
 
+                if role == "teacher":
+                    existing_teacher_code = query_one(
+                        connection,
+                        """
+                        SELECT id FROM users
+                        WHERE role = ? AND teacher_code = ?
+                        """,
+                        ("teacher", teacher_code),
+                    )
+                    if existing_teacher_code:
+                        raise ValueError("Этот код преподавателя уже используется")
+
                 token = secrets.token_urlsafe(32)
                 user_id = insert_and_get_id(
                     connection,
                     """
-                    INSERT INTO users (email, password, display_name, role, token)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO users (email, password, display_name, role, token, teacher_code)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         payload["email"],
@@ -1106,6 +1146,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         payload["displayName"],
                         role,
                         token,
+                        teacher_code if role == "teacher" else None,
                     ),
                 )
                 connection.commit()
@@ -1143,10 +1184,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if user["role"] == "teacher":
-            if not TEACHER_REGISTRATION_CODE:
-                self.send_json(403, {"error": "Вход преподавателей временно недоступен"})
+            if not user.get("teacher_code"):
+                self.send_json(403, {"error": "Для этого аккаунта не сохранён код преподавателя"})
                 return
-            if teacher_code != TEACHER_REGISTRATION_CODE:
+            if teacher_code != user["teacher_code"]:
                 self.send_json(403, {"error": "Неверный код преподавателя"})
                 return
 
