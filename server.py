@@ -59,6 +59,15 @@ ALLOWED_ORIGINS = [origin.strip() for origin in raw_allowed_origins.split(",") i
 DB_LOCK = threading.Lock()
 
 
+class ApiError(Exception):
+    def __init__(self, status, code, message, details=None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+
 def default_store():
     return {
         "users": [
@@ -534,7 +543,11 @@ def migrate_user_email(connection, role, old_email, new_email):
 
 def ensure_teacher_email_allowed(email, role):
     if role == "teacher" and not email.lower().endswith(TEACHER_EMAIL_DOMAIN):
-        raise ValueError("Для преподавателя нужен email, оканчивающийся на @kazatu.edu.kz")
+        raise ApiError(
+            400,
+            "teacher_email_domain_required",
+            "Для преподавателя нужен email, оканчивающийся на @kazatu.edu.kz",
+        )
 
 
 def list_collection(connection, collection, query):
@@ -723,7 +736,7 @@ def create_collection_item(connection, collection, payload):
             (item_id,),
         )
 
-    raise ValueError("Unsupported collection")
+    raise ApiError(400, "unsupported_collection", "Unsupported collection")
 
 
 def update_collection_item(connection, collection, item_id, payload):
@@ -853,7 +866,7 @@ def update_collection_item(connection, collection, item_id, payload):
             (item_id,),
         )
 
-    raise ValueError("Unsupported collection")
+    raise ApiError(400, "unsupported_collection", "Unsupported collection")
 
 
 def delete_collection_item(connection, collection, item_id):
@@ -867,7 +880,11 @@ def build_schedule(connection, semester, year, algorithm):
     rooms = query_all(connection, "SELECT id, number FROM rooms ORDER BY id")
 
     if not courses or not teachers or not rooms:
-        raise ValueError("Для генерации расписания нужны курсы, преподаватели и аудитории.")
+        raise ApiError(
+            400,
+            "schedule_generation_requires_data",
+            "Для генерации расписания нужны курсы, преподаватели и аудитории.",
+        )
 
     start_day = monday_for_week(year)
     slots = [(day_idx, hour) for day_idx in range(6) for hour in range(8, 18)]
@@ -977,7 +994,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
 
         if not path.startswith("/api"):
-            self.send_json(404, {"error": "Not found"})
+            self.send_json(404, {"error": "Not found", "errorCode": "not_found"})
             return
 
         api_path = path[4:] or "/"
@@ -1004,16 +1021,21 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
 
             self.handle_collection_routes(method, api_path, parse_qs(parsed.query))
+        except ApiError as exc:
+            payload = {"error": exc.message, "errorCode": exc.code}
+            if exc.details:
+                payload["details"] = exc.details
+            self.send_json(exc.status, payload)
         except ValueError as exc:
             self.send_json(400, {"error": str(exc)})
         except json.JSONDecodeError:
-            self.send_json(400, {"error": "Некорректный JSON"})
+            self.send_json(400, {"error": "Некорректный JSON", "errorCode": "invalid_json"})
         except (sqlite3.IntegrityError, Exception) as exc:
             is_integrity = exc.__class__.__name__ in {"IntegrityError", "UniqueViolation"}
             if is_integrity:
-                self.send_json(400, {"error": f"Ошибка БД: {exc}"})
+                self.send_json(400, {"error": f"Ошибка БД: {exc}", "errorCode": "database_error"})
                 return
-            self.send_json(500, {"error": f"Внутренняя ошибка сервера: {exc}"})
+            self.send_json(500, {"error": f"Внутренняя ошибка сервера: {exc}", "errorCode": "internal_server_error"})
 
     def handle_collection_routes(self, method, api_path, query):
         parts = [part for part in api_path.split("/") if part]
@@ -1023,7 +1045,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         collection = parts[0]
         if collection not in {"courses", "teachers", "rooms", "schedules"}:
-            self.send_json(404, {"error": "Not found"})
+            self.send_json(404, {"error": "Not found", "errorCode": "not_found"})
             return
 
         user = self.require_auth()
@@ -1031,11 +1053,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if collection in {"courses", "teachers", "rooms"} and user["role"] != "admin":
-            self.send_json(403, {"error": "Недостаточно прав"})
+            self.send_json(403, {"error": "Недостаточно прав", "errorCode": "forbidden"})
             return
 
         if collection == "schedules" and method in {"POST", "PUT", "DELETE"} and user["role"] != "admin":
-            self.send_json(403, {"error": "Недостаточно прав"})
+            self.send_json(403, {"error": "Недостаточно прав", "errorCode": "forbidden"})
             return
 
         with DB_LOCK:
@@ -1054,7 +1076,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     try:
                         item_id = int(parts[1])
                     except ValueError as exc:
-                        raise ValueError("ID должен быть числом") from exc
+                        raise ApiError(400, "invalid_id", "ID должен быть числом") from exc
 
                     existing = query_one(
                         connection,
@@ -1062,7 +1084,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         (item_id,),
                     )
                     if existing is None:
-                        self.send_json(404, {"error": "Запись не найдена"})
+                        self.send_json(404, {"error": "Запись не найдена", "errorCode": "record_not_found"})
                         return
 
                     if method == "PUT":
@@ -1085,7 +1107,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     def require_auth(self):
         token = parse_bearer_token(self.headers.get("Authorization"))
         if not token:
-            self.send_json(401, {"error": "Требуется авторизация"})
+            self.send_json(401, {"error": "Требуется авторизация", "errorCode": "auth_required"})
             return None
 
         with DB_LOCK:
@@ -1101,7 +1123,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
 
         if user is None:
-            self.send_json(401, {"error": "Недействительный токен"})
+            self.send_json(401, {"error": "Недействительный токен", "errorCode": "invalid_token"})
             return None
 
         return user
@@ -1111,12 +1133,21 @@ class ApiHandler(BaseHTTPRequestHandler):
         required = ["email", "password", "displayName"]
         missing = [field for field in required if not payload.get(field)]
         if missing:
-            raise ValueError(f"Заполните поля: {', '.join(missing)}")
+            raise ApiError(
+                400,
+                "fill_required_fields",
+                f"Заполните поля: {', '.join(missing)}",
+                {"fields": missing},
+            )
 
         role = (payload.get("role") or "student").strip().lower()
         email = payload["email"].strip()
         if role not in {"student", "teacher"}:
-            raise ValueError("Можно зарегистрироваться только как студент или преподаватель")
+            raise ApiError(
+                400,
+                "invalid_registration_role",
+                "Можно зарегистрироваться только как студент или преподаватель",
+            )
 
         ensure_teacher_email_allowed(email, role)
 
@@ -1128,7 +1159,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                     (email,),
                 )
                 if existing:
-                    raise ValueError("Пользователь с таким email уже существует")
+                    raise ApiError(
+                        400,
+                        "email_already_exists",
+                        "Пользователь с таким email уже существует",
+                    )
 
                 token = secrets.token_urlsafe(32)
                 user_id = insert_and_get_id(
@@ -1157,7 +1192,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         selected_role = (payload.get("role") or "").strip().lower()
 
         if selected_role and selected_role not in {"admin", "student", "teacher"}:
-            raise ValueError("Некорректная роль")
+            raise ApiError(400, "invalid_role", "Некорректная роль")
 
         with DB_LOCK:
             with get_connection() as connection:
@@ -1171,15 +1206,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
 
         if user is None or not verify_password(user["password"], password):
-            self.send_json(401, {"error": "Неверный email или пароль"})
+            self.send_json(401, {"error": "Неверный email или пароль", "errorCode": "invalid_credentials"})
             return
 
         if selected_role and user["role"] != selected_role:
-            self.send_json(403, {"error": "Этот аккаунт зарегистрирован с другой ролью"})
+            self.send_json(403, {"error": "Этот аккаунт зарегистрирован с другой ролью", "errorCode": "role_mismatch"})
             return
 
         if user["role"] == "teacher" and not user["email"].lower().endswith(TEACHER_EMAIL_DOMAIN):
-            self.send_json(403, {"error": "У аккаунта преподавателя должен быть email @kazatu.edu.kz"})
+            self.send_json(403, {"error": "У аккаунта преподавателя должен быть email @kazatu.edu.kz", "errorCode": "teacher_account_email_domain_required"})
             return
 
         self.send_json(200, sanitize_user(user))
@@ -1189,7 +1224,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if user is None:
             return
         if user["role"] != "admin":
-            self.send_json(403, {"error": "Недостаточно прав"})
+            self.send_json(403, {"error": "Недостаточно прав", "errorCode": "forbidden"})
             return
 
         payload = self.read_json()
