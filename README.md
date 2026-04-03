@@ -31,6 +31,7 @@ PORT=8000
 ALLOWED_ORIGINS=http://localhost:5173
 DATABASE_URL=
 SQLITE_DB_FILE=backend/data/timetable.db
+TEACHER_REGISTRATION_CODE=
 ```
 
 Backend читает переменные из:
@@ -53,3 +54,10 @@ Backend читает переменные из:
 - `admin@university.kz` / `admin123`
 - `teacher@university.kz` / `teacher123`
 - `student@university.kz` / `student123`
+
+## Роли и регистрация
+
+- публичная регистрация доступна только для `student` и `teacher`
+- `admin` через публичную регистрацию создать нельзя
+- для регистрации `teacher` нужен `TEACHER_REGISTRATION_CODE`
+- при логине выбранная роль должна совпадать с ролью аккаунта

@@ -51,6 +51,7 @@ DB_ENGINE = (
 HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT") or os.getenv("BACKEND_PORT", "8000"))
 PASSWORD_PREFIX = "sha256$"
+TEACHER_REGISTRATION_CODE = os.getenv("TEACHER_REGISTRATION_CODE", "").strip()
 
 raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS = [origin.strip() for origin in raw_allowed_origins.split(",") if origin.strip()]
@@ -1071,6 +1072,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         if missing:
             raise ValueError(f"Заполните поля: {', '.join(missing)}")
 
+        role = (payload.get("role") or "student").strip().lower()
+        if role not in {"student", "teacher"}:
+            raise ValueError("Можно зарегистрироваться только как студент или преподаватель")
+
+        if role == "teacher":
+            teacher_code = (payload.get("teacherCode") or "").strip()
+            if not TEACHER_REGISTRATION_CODE:
+                raise ValueError("Регистрация преподавателей временно недоступна")
+            if teacher_code != TEACHER_REGISTRATION_CODE:
+                raise ValueError("Неверный код преподавателя")
+
         with DB_LOCK:
             with get_connection() as connection:
                 existing = query_one(
@@ -1092,7 +1104,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         payload["email"],
                         hash_password(payload["password"]),
                         payload["displayName"],
-                        "student",
+                        role,
                         token,
                     ),
                 )
@@ -1105,6 +1117,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         email = payload.get("email", "").strip()
         password = payload.get("password", "")
+        selected_role = (payload.get("role") or "").strip().lower()
+
+        if selected_role and selected_role not in {"admin", "student", "teacher"}:
+            raise ValueError("Некорректная роль")
 
         with DB_LOCK:
             with get_connection() as connection:
@@ -1119,6 +1135,10 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if user is None or not verify_password(user["password"], password):
             self.send_json(401, {"error": "Неверный email или пароль"})
+            return
+
+        if selected_role and user["role"] != selected_role:
+            self.send_json(403, {"error": "Этот аккаунт зарегистрирован с другой ролью"})
             return
 
         self.send_json(200, sanitize_user(user))
