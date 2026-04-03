@@ -5,11 +5,9 @@ import secrets
 import sqlite3
 import threading
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 from urllib.parse import parse_qs, urlparse
 
 try:
@@ -54,10 +52,6 @@ HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT") or os.getenv("BACKEND_PORT", "8000"))
 PASSWORD_PREFIX = "sha256$"
 TEACHER_EMAIL_DOMAIN = "@kazatu.edu.kz"
-EMAIL_CODE_PREFIX = "sha256$"
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "").strip()
-REGISTRATION_CODE_TTL_MINUTES = int(os.getenv("REGISTRATION_CODE_TTL_MINUTES", "10"))
 
 raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS = [origin.strip() for origin in raw_allowed_origins.split(",") if origin.strip()]
@@ -151,38 +145,6 @@ def verify_password(stored_password, plain_password):
     if stored_password.startswith(PASSWORD_PREFIX):
         return stored_password == hash_password(plain_password)
     return stored_password == plain_password
-
-
-def hash_email_code(code):
-    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
-    return f"{EMAIL_CODE_PREFIX}{digest}"
-
-
-def verify_email_code(code_hash, code):
-    if not code_hash or not code:
-        return False
-    if code_hash.startswith(EMAIL_CODE_PREFIX):
-        return code_hash == hash_email_code(code)
-    return code_hash == code
-
-
-def utc_now():
-    return datetime.now(timezone.utc)
-
-
-def generate_email_code():
-    return f"{secrets.randbelow(1000000):06d}"
-
-
-def parse_datetime(value):
-    if not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    return datetime.fromisoformat(normalized)
-
-
-def format_datetime(value):
-    return value.astimezone(timezone.utc).isoformat()
 
 
 def get_connection():
@@ -406,18 +368,6 @@ def sqlite_schema():
         )
         """,
         """
-        CREATE TABLE IF NOT EXISTS email_verification_codes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            role TEXT NOT NULL,
-            purpose TEXT NOT NULL,
-            code_hash TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            is_used INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-        """,
-        """
         CREATE TABLE IF NOT EXISTS courses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -479,18 +429,6 @@ def postgres_schema():
         )
         """,
         """
-        CREATE TABLE IF NOT EXISTS email_verification_codes (
-            id SERIAL PRIMARY KEY,
-            email TEXT NOT NULL,
-            role TEXT NOT NULL,
-            purpose TEXT NOT NULL,
-            code_hash TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            is_used INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-        """,
-        """
         CREATE TABLE IF NOT EXISTS courses (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
@@ -549,7 +487,7 @@ def ensure_database():
 
         counts = {
             table: query_scalar(connection, f"SELECT COUNT(*) FROM {table}")
-            for table in ("users", "email_verification_codes", "courses", "teachers", "rooms", "schedules")
+            for table in ("users", "courses", "teachers", "rooms", "schedules")
         }
 
         if sum(counts.values()) == 0:
@@ -597,120 +535,6 @@ def migrate_user_email(connection, role, old_email, new_email):
 def ensure_teacher_email_allowed(email, role):
     if role == "teacher" and not email.lower().endswith(TEACHER_EMAIL_DOMAIN):
         raise ValueError("Для преподавателя нужен email, оканчивающийся на @kazatu.edu.kz")
-
-
-def send_verification_email(email, code, role):
-    if not RESEND_API_KEY:
-        raise ValueError("Не настроен RESEND_API_KEY")
-    if not RESEND_FROM_EMAIL:
-        raise ValueError("Не настроен RESEND_FROM_EMAIL")
-
-    role_label = "преподавателя" if role == "teacher" else "студента"
-    subject = "Код подтверждения регистрации"
-    text = (
-        f"Ваш код подтверждения для регистрации {role_label}: {code}\n\n"
-        f"Код действует {REGISTRATION_CODE_TTL_MINUTES} минут."
-    )
-    payload = json.dumps(
-        {
-            "from": RESEND_FROM_EMAIL,
-            "to": [email],
-            "subject": subject,
-            "text": text,
-        }
-    ).encode("utf-8")
-    request = urllib_request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib_request.urlopen(request, timeout=20) as response:
-            status_code = response.getcode()
-            if status_code < 200 or status_code >= 300:
-                raise ValueError("Письмо не было отправлено")
-    except urllib_error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="ignore")
-        raise ValueError(
-            f"Ошибка отправки письма через Resend: {details or exc.reason}"
-        ) from exc
-    except urllib_error.URLError as exc:
-        raise ValueError(f"Не удалось подключиться к Resend: {exc.reason}") from exc
-
-
-def create_registration_code(connection, email, role):
-    code = generate_email_code()
-    expires_at = utc_now() + timedelta(minutes=REGISTRATION_CODE_TTL_MINUTES)
-    created_at = utc_now()
-
-    db_execute(
-        connection,
-        """
-        UPDATE email_verification_codes
-        SET is_used = 1
-        WHERE lower(email) = lower(?) AND role = ? AND purpose = ? AND is_used = 0
-        """,
-        (email, role, "register"),
-    )
-    db_execute(
-        connection,
-        """
-        INSERT INTO email_verification_codes (
-            email, role, purpose, code_hash, expires_at, is_used, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            email,
-            role,
-            "register",
-            hash_email_code(code),
-            format_datetime(expires_at),
-            0,
-            format_datetime(created_at),
-        ),
-    )
-    return code
-
-
-def get_active_registration_code(connection, email, role):
-    return query_one(
-        connection,
-        """
-        SELECT id, code_hash, expires_at, is_used
-        FROM email_verification_codes
-        WHERE lower(email) = lower(?) AND role = ? AND purpose = ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (email, role, "register"),
-    )
-
-
-def verify_registration_code(connection, email, role, code):
-    verification = get_active_registration_code(connection, email, role)
-    if verification is None:
-        raise ValueError("Сначала запросите код подтверждения")
-    if verification["is_used"]:
-        raise ValueError("Этот код уже использован. Запросите новый код")
-
-    expires_at = parse_datetime(verification["expires_at"])
-    if expires_at is None or utc_now() > expires_at:
-        raise ValueError("Срок действия кода истёк. Запросите новый код")
-
-    if not verify_email_code(verification["code_hash"], code):
-        raise ValueError("Неверный код подтверждения")
-
-    db_execute(
-        connection,
-        "UPDATE email_verification_codes SET is_used = 1 WHERE id = ?",
-        (verification["id"],),
-    )
 
 
 def list_collection(connection, collection, query):
@@ -1167,10 +991,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.handle_register()
                 return
 
-            if api_path == "/auth/request-registration-code" and method == "POST":
-                self.handle_request_registration_code()
-                return
-
             if api_path == "/auth/login" and method == "POST":
                 self.handle_login()
                 return
@@ -1288,14 +1108,13 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def handle_register(self):
         payload = self.read_json()
-        required = ["email", "password", "displayName", "verificationCode"]
+        required = ["email", "password", "displayName"]
         missing = [field for field in required if not payload.get(field)]
         if missing:
             raise ValueError(f"Заполните поля: {', '.join(missing)}")
 
         role = (payload.get("role") or "student").strip().lower()
         email = payload["email"].strip()
-        verification_code = payload["verificationCode"].strip()
         if role not in {"student", "teacher"}:
             raise ValueError("Можно зарегистрироваться только как студент или преподаватель")
 
@@ -1311,7 +1130,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if existing:
                     raise ValueError("Пользователь с таким email уже существует")
 
-                verify_registration_code(connection, email, role, verification_code)
                 token = secrets.token_urlsafe(32)
                 user_id = insert_and_get_id(
                     connection,
@@ -1331,40 +1149,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                 user = query_one(connection, "SELECT * FROM users WHERE id = ?", (user_id,))
 
         self.send_json(201, sanitize_user(user))
-
-    def handle_request_registration_code(self):
-        payload = self.read_json()
-        email = payload.get("email", "").strip()
-        role = (payload.get("role") or "student").strip().lower()
-
-        if not email:
-            raise ValueError("Введите email")
-        if role not in {"student", "teacher"}:
-            raise ValueError("Можно запросить код только для студента или преподавателя")
-
-        ensure_teacher_email_allowed(email, role)
-
-        with DB_LOCK:
-            with get_connection() as connection:
-                existing = query_one(
-                    connection,
-                    "SELECT id FROM users WHERE lower(email) = lower(?)",
-                    (email,),
-                )
-                if existing:
-                    raise ValueError("Пользователь с таким email уже существует")
-
-                code = create_registration_code(connection, email, role)
-                connection.commit()
-
-        send_verification_email(email, code, role)
-        self.send_json(
-            200,
-            {
-                "success": True,
-                "message": f"Код подтверждения отправлен на {email}",
-            },
-        )
 
     def handle_login(self):
         payload = self.read_json()
