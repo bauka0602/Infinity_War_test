@@ -51,7 +51,7 @@ DB_ENGINE = (
 HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT") or os.getenv("BACKEND_PORT", "8000"))
 PASSWORD_PREFIX = "sha256$"
-TEACHER_REGISTRATION_CODE = os.getenv("TEACHER_REGISTRATION_CODE", "").strip()
+TEACHER_EMAIL_DOMAIN = "@kazatu.edu.kz"
 
 raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS = [origin.strip() for origin in raw_allowed_origins.split(",") if origin.strip()]
@@ -85,6 +85,20 @@ def default_store():
                 "role": "student",
                 "token": "seed-student-token",
                 "teacherCode": None,
+            },
+        ],
+        "teacherCodes": [
+            {
+                "code": "TEACHER-DEMO-001",
+                "description": "Default teacher code",
+                "assignedEmail": "teacher@university.kz",
+                "isActive": True,
+            },
+            {
+                "code": "TEACHER-DEMO-002",
+                "description": "Reserve teacher code",
+                "assignedEmail": "",
+                "isActive": True,
             },
         ],
         "courses": [
@@ -269,6 +283,21 @@ def seed_from_store(connection, store):
             ),
         )
 
+    for teacher_code in store.get("teacherCodes", []):
+        db_execute(
+            connection,
+            """
+            INSERT INTO teacher_codes (code, description, assigned_email, is_active)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                teacher_code["code"],
+                teacher_code.get("description", ""),
+                teacher_code.get("assignedEmail", ""),
+                1 if teacher_code.get("isActive", True) else 0,
+            ),
+        )
+
     for course in store["courses"]:
         db_execute(
             connection,
@@ -373,6 +402,15 @@ def sqlite_schema():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS teacher_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            description TEXT,
+            assigned_email TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS courses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -435,6 +473,15 @@ def postgres_schema():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS teacher_codes (
+            id SERIAL PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            description TEXT,
+            assigned_email TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS courses (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
@@ -493,7 +540,7 @@ def ensure_database():
 
         counts = {
             table: query_scalar(connection, f"SELECT COUNT(*) FROM {table}")
-            for table in ("users", "courses", "teachers", "rooms", "schedules")
+            for table in ("users", "teacher_codes", "courses", "teachers", "rooms", "schedules")
         }
 
         if sum(counts.values()) == 0:
@@ -523,6 +570,23 @@ def ensure_users_schema(connection):
         WHERE lower(email) = lower(?) AND role = ? AND (teacher_code IS NULL OR teacher_code = '')
         """,
         ("TEACHER-DEMO-001", "teacher@university.kz", "teacher"),
+    )
+    db_execute(
+        connection,
+        """
+        INSERT INTO teacher_codes (code, description, assigned_email, is_active)
+        SELECT ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM teacher_codes WHERE code = ?
+        )
+        """,
+        (
+            "TEACHER-DEMO-001",
+            "Default teacher code",
+            "teacher@university.kz",
+            1,
+            "TEACHER-DEMO-001",
+        ),
     )
 
 
@@ -1103,35 +1167,22 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise ValueError(f"Заполните поля: {', '.join(missing)}")
 
         role = (payload.get("role") or "student").strip().lower()
-        teacher_code = (payload.get("teacherCode") or "").strip()
+        email = payload["email"].strip()
         if role not in {"student", "teacher"}:
             raise ValueError("Можно зарегистрироваться только как студент или преподаватель")
 
-        if role == "teacher":
-            if not teacher_code:
-                raise ValueError("Введите код преподавателя, выданный университетом")
+        if role == "teacher" and not email.lower().endswith(TEACHER_EMAIL_DOMAIN):
+            raise ValueError("Для преподавателя нужен email, оканчивающийся на @kazatu.edu.kz")
 
         with DB_LOCK:
             with get_connection() as connection:
                 existing = query_one(
                     connection,
                     "SELECT id FROM users WHERE lower(email) = lower(?)",
-                    (payload["email"],),
+                    (email,),
                 )
                 if existing:
                     raise ValueError("Пользователь с таким email уже существует")
-
-                if role == "teacher":
-                    existing_teacher_code = query_one(
-                        connection,
-                        """
-                        SELECT id FROM users
-                        WHERE role = ? AND teacher_code = ?
-                        """,
-                        ("teacher", teacher_code),
-                    )
-                    if existing_teacher_code:
-                        raise ValueError("Этот код преподавателя уже используется")
 
                 token = secrets.token_urlsafe(32)
                 user_id = insert_and_get_id(
@@ -1141,12 +1192,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        payload["email"],
+                        email,
                         hash_password(payload["password"]),
                         payload["displayName"],
                         role,
                         token,
-                        teacher_code if role == "teacher" else None,
+                        None,
                     ),
                 )
                 connection.commit()
@@ -1159,7 +1210,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         email = payload.get("email", "").strip()
         password = payload.get("password", "")
         selected_role = (payload.get("role") or "").strip().lower()
-        teacher_code = (payload.get("teacherCode") or "").strip()
 
         if selected_role and selected_role not in {"admin", "student", "teacher"}:
             raise ValueError("Некорректная роль")
@@ -1183,13 +1233,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_json(403, {"error": "Этот аккаунт зарегистрирован с другой ролью"})
             return
 
-        if user["role"] == "teacher":
-            if not user.get("teacher_code"):
-                self.send_json(403, {"error": "Для этого аккаунта не сохранён код преподавателя"})
-                return
-            if teacher_code != user["teacher_code"]:
-                self.send_json(403, {"error": "Неверный код преподавателя"})
-                return
+        if user["role"] == "teacher" and not user["email"].lower().endswith(TEACHER_EMAIL_DOMAIN):
+            self.send_json(403, {"error": "У аккаунта преподавателя должен быть email @kazatu.edu.kz"})
+            return
 
         self.send_json(200, sanitize_user(user))
 
