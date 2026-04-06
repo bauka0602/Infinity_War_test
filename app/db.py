@@ -78,13 +78,41 @@ def insert_and_get_id(connection, query, params=()):
     return cursor.lastrowid
 
 
+def column_exists(connection, table_name, column_name):
+    if DB_ENGINE == "postgres":
+        return bool(
+            query_scalar(
+                connection,
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = ? AND column_name = ?
+                """,
+                (table_name, column_name),
+            )
+        )
+
+    rows = query_all(connection, f"PRAGMA table_info({table_name})")
+    return any(row["name"] == column_name for row in rows)
+
+
+def ensure_column(connection, table_name, column_name, column_definition):
+    if column_exists(connection, table_name, column_name):
+        return
+
+    db_execute(
+        connection,
+        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}",
+    )
+
+
 def seed_from_store(connection, store):
     for user in store["users"]:
         db_execute(
             connection,
             """
-            INSERT INTO users (email, password, display_name, role, token)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users (email, password, display_name, role, token, avatar_data)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 user["email"],
@@ -92,6 +120,7 @@ def seed_from_store(connection, store):
                 user["displayName"],
                 user["role"],
                 user["token"],
+                user.get("avatarData"),
             ),
         )
 
@@ -194,7 +223,8 @@ def sqlite_schema():
             password TEXT NOT NULL,
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
-            token TEXT NOT NULL
+            token TEXT NOT NULL,
+            avatar_data TEXT
         )
         """,
         """
@@ -255,7 +285,8 @@ def postgres_schema():
             password TEXT NOT NULL,
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
-            token TEXT NOT NULL
+            token TEXT NOT NULL,
+            avatar_data TEXT
         )
         """,
         """
@@ -347,6 +378,7 @@ def ensure_database():
         schema = postgres_schema() if DB_ENGINE == "postgres" else sqlite_schema()
         for statement in schema:
             db_execute(connection, statement)
+        ensure_column(connection, "users", "avatar_data", "TEXT")
         migrate_default_user_emails(connection)
         connection.commit()
 

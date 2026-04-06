@@ -1,7 +1,7 @@
 import secrets
 
 from .config import DB_LOCK, TEACHER_EMAIL_DOMAIN
-from .db import get_connection, insert_and_get_id, query_one
+from .db import db_execute, get_connection, insert_and_get_id, query_one
 from .errors import ApiError
 from .security import hash_password, parse_bearer_token, sanitize_user, verify_password
 
@@ -25,7 +25,7 @@ def require_auth_user(headers):
             user = query_one(
                 connection,
                 """
-                SELECT id, email, display_name, role, token
+                SELECT id, email, display_name, role, token, avatar_data
                 FROM users
                 WHERE token = ?
                 """,
@@ -78,8 +78,8 @@ def register_user(payload):
             user_id = insert_and_get_id(
                 connection,
                 """
-                INSERT INTO users (email, password, display_name, role, token)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (email, password, display_name, role, token, avatar_data)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     email,
@@ -87,12 +87,47 @@ def register_user(payload):
                     payload["displayName"],
                     role,
                     token,
+                    None,
                 ),
             )
             connection.commit()
             user = query_one(connection, "SELECT * FROM users WHERE id = ?", (user_id,))
 
     return sanitize_user(user)
+
+
+def get_current_profile(headers):
+    return sanitize_user(require_auth_user(headers))
+
+
+def update_profile_avatar(headers, payload):
+    avatar_data = (payload.get("avatarData") or "").strip()
+    if not avatar_data:
+        raise ApiError(400, "fill_required_fields", "Заполните поля: avatarData")
+
+    if not avatar_data.startswith("data:image/"):
+        raise ApiError(400, "bad_request", "Допустимы только изображения")
+
+    if len(avatar_data) > 1_500_000:
+        raise ApiError(400, "bad_request", "Изображение слишком большое")
+
+    user = require_auth_user(headers)
+
+    with DB_LOCK:
+        with get_connection() as connection:
+            db_execute(
+                connection,
+                """
+                UPDATE users
+                SET avatar_data = ?
+                WHERE id = ?
+                """,
+                (avatar_data, user["id"]),
+            )
+            connection.commit()
+            updated_user = query_one(connection, "SELECT * FROM users WHERE id = ?", (user["id"],))
+
+    return sanitize_user(updated_user)
 
 
 def login_user(payload):

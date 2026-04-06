@@ -21,6 +21,7 @@ def sanitize_user(row):
         "displayName": row["display_name"],
         "role": row["role"],
         "token": row["token"],
+        "avatarData": row.get("avatar_data"),
     }
 
 

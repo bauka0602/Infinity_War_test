@@ -4,7 +4,13 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-from .auth_service import login_user, register_user, require_auth_user
+from .auth_service import (
+    get_current_profile,
+    login_user,
+    register_user,
+    require_auth_user,
+    update_profile_avatar,
+)
 from .collections import create_collection_item, delete_collection_item, list_collection, update_collection_item
 from .config import ALLOWED_ORIGINS, DB_ENGINE, DB_LOCK
 from .db import get_connection, query_one
@@ -90,6 +96,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             if api_path == "/auth/logout" and method == "POST":
                 self.send_json(200, {"success": True})
+                return
+
+            if api_path == "/profile" and method == "GET":
+                self.send_json(200, get_current_profile(self.headers))
+                return
+
+            if api_path == "/profile/avatar" and method == "POST":
+                self.send_json(200, update_profile_avatar(self.headers, self.read_json()))
                 return
 
             if api_path == "/schedules/generate" and method == "POST":
