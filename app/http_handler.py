@@ -11,6 +11,7 @@ from .auth_service import (
     require_auth_user,
     update_profile_avatar,
 )
+from .admin_service import clear_all_data, clear_collection_data
 from .collections import create_collection_item, delete_collection_item, list_collection, update_collection_item
 from .config import ALLOWED_ORIGINS, DB_ENGINE, DB_LOCK
 from .db import get_connection, query_one
@@ -128,6 +129,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "timetable-import-template.xlsx",
                 )
+                return
+
+            if api_path == "/admin/clear-all" and method == "POST":
+                self.send_json(200, clear_all_data(self.headers))
+                return
+
+            if api_path.startswith("/admin/clear/") and method == "POST":
+                collection = api_path.rsplit("/", 1)[-1]
+                self.send_json(200, clear_collection_data(self.headers, collection))
                 return
 
             if api_path == "/schedules/generate" and method == "POST":
