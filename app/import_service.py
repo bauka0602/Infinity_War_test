@@ -10,6 +10,8 @@ from .errors import ApiError
 SHEET_ALIASES = {
     "courses": "courses",
     "course": "courses",
+    "disciplines": "courses",
+    "discipline": "courses",
     "teachers": "teachers",
     "teacher": "teachers",
     "rooms": "rooms",
@@ -29,10 +31,10 @@ COURSE_HEADERS = {
     "course_name": "name",
     "название": "name",
     "атауы": "name",
-    "study_year": "study_year",
-    "year": "study_year",
-    "курс": "study_year",
-    "год": "study_year",
+    "study_year": "year",
+    "year": "year",
+    "курс": "year",
+    "год": "year",
     "semester": "semester",
     "семестр": "semester",
     "department": "department",
@@ -48,12 +50,12 @@ COURSE_HEADERS = {
     "instructor_name": "instructor_name",
     "преподаватель": "instructor_name",
     "оқытушы": "instructor_name",
-    "programme": "programme_name",
-    "programme_name": "programme_name",
-    "program_name": "programme_name",
-    "program": "programme_name",
-    "образовательная_программа": "programme_name",
-    "бағдарлама": "programme_name",
+    "programme": "programme",
+    "programme_name": "programme",
+    "program_name": "programme",
+    "program": "programme",
+    "образовательная_программа": "programme",
+    "бағдарлама": "programme",
     "description": "description",
     "описание": "description",
     "сипаттама": "description",
@@ -67,20 +69,20 @@ TEACHER_HEADERS = {
     "email": "email",
     "phone": "phone",
     "телефон": "phone",
-    "specialization": "specialization",
-    "faculty": "specialization",
-    "department": "specialization",
-    "faculty_institute": "specialization",
-    "faculty_or_institute": "specialization",
-    "факультет": "specialization",
-    "факультет_институт": "specialization",
-    "институт": "specialization",
-    "специализация": "specialization",
-    "мамандығы": "specialization",
-    "max_hours_per_week": "max_hours_per_week",
-    "max_hours": "max_hours_per_week",
-    "максимум_часов_в_неделю": "max_hours_per_week",
-    "апталық_сағат_лимиті": "max_hours_per_week",
+    "specialization": "department",
+    "faculty": "department",
+    "department": "department",
+    "faculty_institute": "department",
+    "faculty_or_institute": "department",
+    "факультет": "department",
+    "факультет_институт": "department",
+    "институт": "department",
+    "специализация": "department",
+    "мамандығы": "department",
+    "max_hours_per_week": "weekly_hours_limit",
+    "max_hours": "weekly_hours_limit",
+    "максимум_часов_в_неделю": "weekly_hours_limit",
+    "апталық_сағат_лимиті": "weekly_hours_limit",
 }
 
 ROOM_HEADERS = {
@@ -104,10 +106,10 @@ ROOM_HEADERS = {
     "факультет": "department",
     "факультет_институт": "department",
     "институт": "department",
-    "available": "is_available",
-    "is_available": "is_available",
-    "доступно": "is_available",
-    "қолжетімді": "is_available",
+    "available": "available",
+    "is_available": "available",
+    "доступно": "available",
+    "қолжетімді": "available",
     "equipment": "equipment",
     "оборудование": "equipment",
     "жабдықтар": "equipment",
@@ -143,7 +145,7 @@ SECTION_HEADERS = {
 }
 
 REQUIRED_FIELDS = {
-    "courses": ["code", "name", "study_year", "semester", "programme_name", "department"],
+    "courses": ["code", "name", "year", "semester", "programme", "department"],
     "teachers": ["name", "email"],
     "rooms": ["number", "capacity", "department"],
     "groups": ["name", "student_count"],
@@ -173,24 +175,24 @@ ROOM_TYPE_ALIASES = {
 }
 
 TEMPLATE_HEADERS = {
-    "Courses": [
+    "Disciplines": [
         "code",
         "name",
-        "study_year",
+        "year",
         "semester",
-        "programme_name",
+        "programme",
         "department",
         "instructor_name",
         "description",
     ],
-    "Teachers": ["name", "email", "phone", "faculty_institute"],
-    "Rooms": ["number", "capacity", "building", "type", "department", "is_available", "equipment"],
+    "Teachers": ["name", "email", "phone", "department"],
+    "Rooms": ["number", "capacity", "building", "type", "department", "available", "equipment"],
     "Groups": ["name", "student_count", "has_subgroups"],
     "Sections": ["course_code", "group_name", "classes_count"],
 }
 
 TEMPLATE_ROWS = {
-    "Courses": [
+    "Disciplines": [
         [
             "CS101",
             "Programming 1",
@@ -369,7 +371,7 @@ def _validate_required_fields(entity_name, row_index, payload):
 
 
 def _upsert_course(connection, payload):
-    normalized = normalize_number_fields(payload, ["study_year", "semester"])
+    normalized = normalize_number_fields(payload, ["year", "study_year", "semester"])
     instructor_name = (normalized.get("instructor_name") or "").strip()
     instructor_id = None
     if instructor_name:
@@ -412,12 +414,12 @@ def _upsert_course(connection, payload):
                 normalized["name"],
                 normalized["code"],
                 normalized.get("description", "") or "",
-                normalized.get("study_year"),
+                normalized.get("year", normalized.get("study_year")),
                 normalized.get("semester"),
                 normalized.get("department", "") or "",
                 instructor_id,
                 instructor_name,
-                normalized.get("programme_name", "") or "",
+                normalized.get("programme", normalized.get("programme_name", "")) or "",
                 existing["id"],
             ),
         )
@@ -438,19 +440,19 @@ def _upsert_course(connection, payload):
             None,
             None,
             normalized.get("description", "") or "",
-            normalized.get("study_year"),
+            normalized.get("year", normalized.get("study_year")),
             normalized.get("semester"),
             normalized.get("department", "") or "",
             instructor_id,
             instructor_name,
-            normalized.get("programme_name", "") or "",
+            normalized.get("programme", normalized.get("programme_name", "")) or "",
         ),
     )
     return "inserted"
 
 
 def _upsert_teacher(connection, payload):
-    normalized = normalize_number_fields(payload, ["max_hours_per_week"])
+    normalized = normalize_number_fields(payload, ["weekly_hours_limit", "max_hours_per_week"])
     existing = query_one(
         connection,
         "SELECT id FROM teachers WHERE lower(email) = lower(?)",
@@ -468,8 +470,8 @@ def _upsert_teacher(connection, payload):
                 normalized["name"],
                 normalized["email"],
                 normalized.get("phone", "") or "",
-                normalized.get("specialization", normalized.get("department", "")) or "",
-                normalized.get("max_hours_per_week", normalized.get("weekly_hours_limit")),
+                normalized.get("department", normalized.get("specialization", "")) or "",
+                normalized.get("weekly_hours_limit", normalized.get("max_hours_per_week")),
                 existing["id"],
             ),
         )
@@ -485,8 +487,8 @@ def _upsert_teacher(connection, payload):
             normalized["name"],
             normalized["email"],
             normalized.get("phone", "") or "",
-            normalized.get("specialization", normalized.get("department", "")) or "",
-            normalized.get("max_hours_per_week", normalized.get("weekly_hours_limit")),
+            normalized.get("department", normalized.get("specialization", "")) or "",
+            normalized.get("weekly_hours_limit", normalized.get("max_hours_per_week")),
         ),
     )
     return "inserted"
@@ -495,7 +497,7 @@ def _upsert_teacher(connection, payload):
 def _upsert_room(connection, payload):
     normalized = normalize_number_fields(payload, ["capacity"])
     normalized["type"] = _normalize_room_type(normalized.get("type"))
-    normalized["is_available"] = _normalize_availability(normalized.get("is_available"))
+    normalized["available"] = _normalize_availability(normalized.get("available"))
     existing = query_one(
         connection,
         "SELECT id FROM rooms WHERE number = ?",
@@ -516,7 +518,7 @@ def _upsert_room(connection, payload):
                 normalized.get("type", "") or "",
                 normalized.get("equipment", "") or "",
                 normalized.get("department", "") or "",
-                normalized.get("is_available", 1),
+                normalized.get("available", 1),
                 existing["id"],
             ),
         )
@@ -535,7 +537,7 @@ def _upsert_room(connection, payload):
             normalized.get("type", "") or "",
             normalized.get("equipment", "") or "",
             normalized.get("department", "") or "",
-            normalized.get("is_available", 1),
+            normalized.get("available", 1),
         ),
     )
     return "inserted"
@@ -720,7 +722,7 @@ def import_excel_data(headers, payload):
                 raise ApiError(
                     400,
                     "bad_request",
-                    "В Excel не найдены листы Courses, Teachers, Rooms, Groups или Sections.",
+                    "В Excel не найдены листы Disciplines, Teachers, Rooms, Groups или Sections.",
                 )
 
             connection.commit()

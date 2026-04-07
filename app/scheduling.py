@@ -51,7 +51,7 @@ def build_schedule(connection, semester, year, algorithm):
         raise ApiError(
             400,
             "schedule_generation_requires_data",
-            "Для генерации расписания нужны секции, преподаватели и аудитории.",
+            "Для генерации расписания нужны секции, преподаватели, группы и аудитории.",
         )
 
     start_day = monday_for_week(year)

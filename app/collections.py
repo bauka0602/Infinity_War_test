@@ -43,7 +43,7 @@ def list_collection(connection, collection, query, user=None):
             """
             SELECT
                 id, name, code, credits, hours, description,
-                year AS study_year, semester, department, instructor_id, instructor_name, programme AS programme_name
+                year, semester, department, instructor_id, instructor_name, programme
             FROM courses
             ORDER BY id
             """,
@@ -53,7 +53,7 @@ def list_collection(connection, collection, query, user=None):
         return query_all(
             connection,
             """
-            SELECT id, name, email, phone, department AS specialization, weekly_hours_limit AS max_hours_per_week
+            SELECT id, name, email, phone, department, weekly_hours_limit
             FROM teachers
             ORDER BY id
             """,
@@ -63,7 +63,7 @@ def list_collection(connection, collection, query, user=None):
         return query_all(
             connection,
             """
-            SELECT id, number, capacity, building, type, equipment, department, available AS is_available
+            SELECT id, number, capacity, building, type, equipment, department, available
             FROM rooms
             ORDER BY id
             """,
@@ -83,7 +83,7 @@ def list_collection(connection, collection, query, user=None):
         return query_all(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count AS class_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count
             FROM sections
             ORDER BY id
             """,
@@ -135,7 +135,7 @@ def list_collection(connection, collection, query, user=None):
 
 def create_collection_item(connection, collection, payload):
     if collection == "courses":
-        normalized = normalize_number_fields(payload, ["study_year", "semester", "instructor_id"])
+        normalized = normalize_number_fields(payload, ["year", "study_year", "semester", "instructor_id"])
         course_name = normalized.get("name")
         course_code = normalized.get("code") or course_name
         item_id = insert_and_get_id(
@@ -153,12 +153,12 @@ def create_collection_item(connection, collection, payload):
                 None,
                 None,
                 normalized.get("description", ""),
-                normalized.get("study_year"),
+                normalized.get("year", normalized.get("study_year")),
                 normalized.get("semester"),
                 normalized.get("department", ""),
                 normalized.get("instructor_id"),
                 normalized.get("instructor_name", ""),
-                normalized.get("programme_name", ""),
+                normalized.get("programme", normalized.get("programme_name", "")),
             ),
         )
         connection.commit()
@@ -167,7 +167,7 @@ def create_collection_item(connection, collection, payload):
             """
             SELECT
                 id, name, code, credits, hours, description,
-                year AS study_year, semester, department, instructor_id, instructor_name, programme AS programme_name
+                year, semester, department, instructor_id, instructor_name, programme
             FROM courses
             WHERE id = ?
             """,
@@ -175,7 +175,7 @@ def create_collection_item(connection, collection, payload):
         )
 
     if collection == "teachers":
-        normalized = normalize_number_fields(payload, ["max_hours_per_week"])
+        normalized = normalize_number_fields(payload, ["weekly_hours_limit", "max_hours_per_week"])
         validate_teacher_email(normalized.get("email"))
         item_id = insert_and_get_id(
             connection,
@@ -187,15 +187,15 @@ def create_collection_item(connection, collection, payload):
                 normalized.get("name"),
                 normalized.get("email"),
                 normalized.get("phone", ""),
-                normalized.get("specialization", normalized.get("department", "")),
-                normalized.get("max_hours_per_week", normalized.get("weekly_hours_limit")),
+                normalized.get("department", normalized.get("specialization", "")),
+                normalized.get("weekly_hours_limit", normalized.get("max_hours_per_week")),
             ),
         )
         connection.commit()
         return query_one(
             connection,
             """
-            SELECT id, name, email, phone, department AS specialization, weekly_hours_limit AS max_hours_per_week
+            SELECT id, name, email, phone, department, weekly_hours_limit
             FROM teachers
             WHERE id = ?
             """,
@@ -203,7 +203,7 @@ def create_collection_item(connection, collection, payload):
         )
 
     if collection == "rooms":
-        normalized = normalize_number_fields(payload, ["capacity", "is_available"])
+        normalized = normalize_number_fields(payload, ["capacity", "available", "is_available"])
         item_id = insert_and_get_id(
             connection,
             """
@@ -217,14 +217,14 @@ def create_collection_item(connection, collection, payload):
                 normalized.get("type", ""),
                 normalized.get("equipment", ""),
                 normalized.get("department", ""),
-                1 if normalized.get("is_available", normalized.get("available", 1)) else 0,
+                1 if normalized.get("available", normalized.get("is_available", 1)) else 0,
             ),
         )
         connection.commit()
         return query_one(
             connection,
             """
-            SELECT id, number, capacity, building, type, equipment, department, available AS is_available
+            SELECT id, number, capacity, building, type, equipment, department, available
             FROM rooms
             WHERE id = ?
             """,
@@ -257,7 +257,7 @@ def create_collection_item(connection, collection, payload):
         )
 
     if collection == "sections":
-        normalized = normalize_number_fields(payload, ["course_id", "group_id", "class_count"])
+        normalized = normalize_number_fields(payload, ["course_id", "group_id", "classes_count", "class_count"])
         item_id = insert_and_get_id(
             connection,
             """
@@ -269,14 +269,14 @@ def create_collection_item(connection, collection, payload):
                 normalized.get("course_name"),
                 normalized.get("group_id"),
                 normalized.get("group_name", ""),
-                normalized.get("class_count", normalized.get("classes_count")),
+                normalized.get("classes_count", normalized.get("class_count")),
             ),
         )
         connection.commit()
         return query_one(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count AS class_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count
             FROM sections
             WHERE id = ?
             """,
@@ -333,7 +333,7 @@ def create_collection_item(connection, collection, payload):
 
 def update_collection_item(connection, collection, item_id, payload):
     if collection == "courses":
-        normalized = normalize_number_fields(payload, ["study_year", "semester", "instructor_id"])
+        normalized = normalize_number_fields(payload, ["year", "study_year", "semester", "instructor_id"])
         course_name = normalized.get("name")
         course_code = normalized.get("code") or course_name
         db_execute(
@@ -352,12 +352,12 @@ def update_collection_item(connection, collection, item_id, payload):
                 None,
                 None,
                 normalized.get("description", ""),
-                normalized.get("study_year"),
+                normalized.get("year", normalized.get("study_year")),
                 normalized.get("semester"),
                 normalized.get("department", ""),
                 normalized.get("instructor_id"),
                 normalized.get("instructor_name", ""),
-                normalized.get("programme_name", ""),
+                normalized.get("programme", normalized.get("programme_name", "")),
                 item_id,
             ),
         )
@@ -367,7 +367,7 @@ def update_collection_item(connection, collection, item_id, payload):
             """
             SELECT
                 id, name, code, credits, hours, description,
-                year AS study_year, semester, department, instructor_id, instructor_name, programme AS programme_name
+                year, semester, department, instructor_id, instructor_name, programme
             FROM courses
             WHERE id = ?
             """,
@@ -375,7 +375,7 @@ def update_collection_item(connection, collection, item_id, payload):
         )
 
     if collection == "teachers":
-        normalized = normalize_number_fields(payload, ["max_hours_per_week"])
+        normalized = normalize_number_fields(payload, ["weekly_hours_limit", "max_hours_per_week"])
         validate_teacher_email(normalized.get("email"))
         db_execute(
             connection,
@@ -388,8 +388,8 @@ def update_collection_item(connection, collection, item_id, payload):
                 normalized.get("name"),
                 normalized.get("email"),
                 normalized.get("phone", ""),
-                normalized.get("specialization", normalized.get("department", "")),
-                normalized.get("max_hours_per_week", normalized.get("weekly_hours_limit")),
+                normalized.get("department", normalized.get("specialization", "")),
+                normalized.get("weekly_hours_limit", normalized.get("max_hours_per_week")),
                 item_id,
             ),
         )
@@ -397,7 +397,7 @@ def update_collection_item(connection, collection, item_id, payload):
         return query_one(
             connection,
             """
-            SELECT id, name, email, phone, department AS specialization, weekly_hours_limit AS max_hours_per_week
+            SELECT id, name, email, phone, department, weekly_hours_limit
             FROM teachers
             WHERE id = ?
             """,
@@ -405,7 +405,7 @@ def update_collection_item(connection, collection, item_id, payload):
         )
 
     if collection == "rooms":
-        normalized = normalize_number_fields(payload, ["capacity", "is_available"])
+        normalized = normalize_number_fields(payload, ["capacity", "available", "is_available"])
         db_execute(
             connection,
             """
@@ -420,7 +420,7 @@ def update_collection_item(connection, collection, item_id, payload):
                 normalized.get("type", ""),
                 normalized.get("equipment", ""),
                 normalized.get("department", ""),
-                1 if normalized.get("is_available", normalized.get("available", 1)) else 0,
+                1 if normalized.get("available", normalized.get("is_available", 1)) else 0,
                 item_id,
             ),
         )
@@ -428,7 +428,7 @@ def update_collection_item(connection, collection, item_id, payload):
         return query_one(
             connection,
             """
-            SELECT id, number, capacity, building, type, equipment, department, available AS is_available
+            SELECT id, number, capacity, building, type, equipment, department, available
             FROM rooms
             WHERE id = ?
             """,
@@ -463,7 +463,7 @@ def update_collection_item(connection, collection, item_id, payload):
         )
 
     if collection == "sections":
-        normalized = normalize_number_fields(payload, ["course_id", "group_id", "class_count"])
+        normalized = normalize_number_fields(payload, ["course_id", "group_id", "classes_count", "class_count"])
         db_execute(
             connection,
             """
@@ -476,7 +476,7 @@ def update_collection_item(connection, collection, item_id, payload):
                 normalized.get("course_name"),
                 normalized.get("group_id"),
                 normalized.get("group_name", ""),
-                normalized.get("class_count", normalized.get("classes_count")),
+                normalized.get("classes_count", normalized.get("class_count")),
                 item_id,
             ),
         )
@@ -484,7 +484,7 @@ def update_collection_item(connection, collection, item_id, payload):
         return query_one(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count AS class_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count
             FROM sections
             WHERE id = ?
             """,
@@ -542,5 +542,17 @@ def update_collection_item(connection, collection, item_id, payload):
 
 
 def delete_collection_item(connection, collection, item_id):
+    if collection == "courses":
+        db_execute(connection, "DELETE FROM schedules WHERE course_id = ?", (item_id,))
+        db_execute(connection, "DELETE FROM sections WHERE course_id = ?", (item_id,))
+    elif collection == "groups":
+        db_execute(connection, "DELETE FROM schedules WHERE group_id = ?", (item_id,))
+        db_execute(connection, "DELETE FROM sections WHERE group_id = ?", (item_id,))
+        db_execute(connection, "UPDATE users SET group_id = NULL, group_name = '', subgroup = '' WHERE group_id = ?", (item_id,))
+    elif collection == "teachers":
+        db_execute(connection, "DELETE FROM schedules WHERE teacher_id = ?", (item_id,))
+        db_execute(connection, "UPDATE courses SET instructor_id = NULL, instructor_name = '' WHERE instructor_id = ?", (item_id,))
+    elif collection == "rooms":
+        db_execute(connection, "DELETE FROM schedules WHERE room_id = ?", (item_id,))
     db_execute(connection, f"DELETE FROM {collection} WHERE id = ?", (item_id,))
     connection.commit()

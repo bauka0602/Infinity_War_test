@@ -193,7 +193,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found", "errorCode": "not_found"})
             return
 
-        collection = parts[0]
+        collection_aliases = {
+            "disciplines": "courses",
+        }
+        raw_collection = parts[0]
+        collection = collection_aliases.get(raw_collection, raw_collection)
         if collection not in {"courses", "teachers", "rooms", "groups", "schedules", "sections"}:
             self.send_json(404, {"error": "Not found", "errorCode": "not_found"})
             return
