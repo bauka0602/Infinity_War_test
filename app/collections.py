@@ -30,7 +30,9 @@ def list_collection(connection, collection, query):
         return query_all(
             connection,
             """
-            SELECT id, name, code, credits, hours, description
+            SELECT
+                id, name, code, credits, hours, description,
+                study_year, semester, department, instructor_id, instructor_name
             FROM courses
             ORDER BY id
             """,
@@ -84,25 +86,41 @@ def list_collection(connection, collection, query):
 
 def create_collection_item(connection, collection, payload):
     if collection == "courses":
-        normalized = normalize_number_fields(payload, ["credits", "hours"])
+        normalized = normalize_number_fields(payload, ["study_year", "semester", "instructor_id"])
+        course_name = normalized.get("name")
+        course_code = normalized.get("code") or course_name
         item_id = insert_and_get_id(
             connection,
             """
-            INSERT INTO courses (name, code, credits, hours, description)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO courses (
+                name, code, credits, hours, description,
+                study_year, semester, department, instructor_id, instructor_name
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                normalized.get("name"),
-                normalized.get("code"),
-                normalized.get("credits"),
-                normalized.get("hours"),
+                course_name,
+                course_code,
+                None,
+                None,
                 normalized.get("description", ""),
+                normalized.get("study_year"),
+                normalized.get("semester"),
+                normalized.get("department", ""),
+                normalized.get("instructor_id"),
+                normalized.get("instructor_name", ""),
             ),
         )
         connection.commit()
         return query_one(
             connection,
-            "SELECT id, name, code, credits, hours, description FROM courses WHERE id = ?",
+            """
+            SELECT
+                id, name, code, credits, hours, description,
+                study_year, semester, department, instructor_id, instructor_name
+            FROM courses
+            WHERE id = ?
+            """,
             (item_id,),
         )
 
@@ -206,27 +224,42 @@ def create_collection_item(connection, collection, payload):
 
 def update_collection_item(connection, collection, item_id, payload):
     if collection == "courses":
-        normalized = normalize_number_fields(payload, ["credits", "hours"])
+        normalized = normalize_number_fields(payload, ["study_year", "semester", "instructor_id"])
+        course_name = normalized.get("name")
+        course_code = normalized.get("code") or course_name
         db_execute(
             connection,
             """
             UPDATE courses
-            SET name = ?, code = ?, credits = ?, hours = ?, description = ?
+            SET
+                name = ?, code = ?, credits = ?, hours = ?, description = ?,
+                study_year = ?, semester = ?, department = ?, instructor_id = ?, instructor_name = ?
             WHERE id = ?
             """,
             (
-                normalized.get("name"),
-                normalized.get("code"),
-                normalized.get("credits"),
-                normalized.get("hours"),
+                course_name,
+                course_code,
+                None,
+                None,
                 normalized.get("description", ""),
+                normalized.get("study_year"),
+                normalized.get("semester"),
+                normalized.get("department", ""),
+                normalized.get("instructor_id"),
+                normalized.get("instructor_name", ""),
                 item_id,
             ),
         )
         connection.commit()
         return query_one(
             connection,
-            "SELECT id, name, code, credits, hours, description FROM courses WHERE id = ?",
+            """
+            SELECT
+                id, name, code, credits, hours, description,
+                study_year, semester, department, instructor_id, instructor_name
+            FROM courses
+            WHERE id = ?
+            """,
             (item_id,),
         )
 

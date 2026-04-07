@@ -128,15 +128,23 @@ def seed_from_store(connection, store):
         db_execute(
             connection,
             """
-            INSERT INTO courses (name, code, credits, hours, description)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO courses (
+                name, code, credits, hours, description,
+                study_year, semester, department, instructor_id, instructor_name
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 course["name"],
                 course["code"],
-                course["credits"],
-                course["hours"],
+                course.get("credits"),
+                course.get("hours"),
                 course.get("description", ""),
+                course.get("study_year"),
+                course.get("semester"),
+                course.get("department", ""),
+                course.get("instructor_id"),
+                course.get("instructor_name", ""),
             ),
         )
 
@@ -234,7 +242,12 @@ def sqlite_schema():
             code TEXT NOT NULL,
             credits INTEGER,
             hours INTEGER,
-            description TEXT
+            description TEXT,
+            study_year INTEGER,
+            semester INTEGER,
+            department TEXT,
+            instructor_id INTEGER,
+            instructor_name TEXT
         )
         """,
         """
@@ -296,7 +309,12 @@ def postgres_schema():
             code TEXT NOT NULL,
             credits INTEGER,
             hours INTEGER,
-            description TEXT
+            description TEXT,
+            study_year INTEGER,
+            semester INTEGER,
+            department TEXT,
+            instructor_id INTEGER,
+            instructor_name TEXT
         )
         """,
         """
@@ -379,6 +397,11 @@ def ensure_database():
         for statement in schema:
             db_execute(connection, statement)
         ensure_column(connection, "users", "avatar_data", "TEXT")
+        ensure_column(connection, "courses", "study_year", "INTEGER")
+        ensure_column(connection, "courses", "semester", "INTEGER")
+        ensure_column(connection, "courses", "department", "TEXT")
+        ensure_column(connection, "courses", "instructor_id", "INTEGER")
+        ensure_column(connection, "courses", "instructor_name", "TEXT")
         migrate_default_user_emails(connection)
         connection.commit()
 

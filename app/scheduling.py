@@ -11,7 +11,14 @@ def monday_for_week(target_year):
 
 
 def build_schedule(connection, semester, year, algorithm):
-    courses = query_all(connection, "SELECT id, name FROM courses ORDER BY id")
+    courses = query_all(
+        connection,
+        """
+        SELECT id, name, instructor_id, instructor_name, semester, study_year
+        FROM courses
+        ORDER BY id
+        """,
+    )
     teachers = query_all(connection, "SELECT id, name FROM teachers ORDER BY id")
     rooms = query_all(connection, "SELECT id, number FROM rooms ORDER BY id")
 
@@ -28,7 +35,14 @@ def build_schedule(connection, semester, year, algorithm):
 
     for idx, course in enumerate(courses):
         day_idx, hour = slots[idx % len(slots)]
-        teacher = teachers[idx % len(teachers)]
+        teacher = next(
+            (
+                existing_teacher
+                for existing_teacher in teachers
+                if existing_teacher["id"] == course.get("instructor_id")
+            ),
+            None,
+        ) or teachers[idx % len(teachers)]
         room = rooms[idx % len(rooms)]
         generated.append(
             (
