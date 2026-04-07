@@ -25,7 +25,7 @@ def require_auth_user(headers):
             user = query_one(
                 connection,
                 """
-                SELECT id, email, display_name, role, token, avatar_data
+                SELECT id, email, display_name, role, token, avatar_data, department, programme_name
                 FROM users
                 WHERE token = ?
                 """,
@@ -51,12 +51,28 @@ def register_user(payload):
 
     role = (payload.get("role") or "student").strip().lower()
     email = payload["email"].strip()
+    department = (payload.get("department") or "").strip()
+    programme_name = (payload.get("programmeName") or "").strip()
     if role not in {"student", "teacher"}:
         raise ApiError(
             400,
             "invalid_registration_role",
             "Можно зарегистрироваться только как студент или преподаватель",
         )
+
+    if role == "student":
+        student_missing = []
+        if not department:
+            student_missing.append("department")
+        if not programme_name:
+            student_missing.append("programmeName")
+        if student_missing:
+            raise ApiError(
+                400,
+                "fill_required_fields",
+                f"Заполните поля: {', '.join(student_missing)}",
+                {"fields": student_missing},
+            )
 
     ensure_teacher_email_allowed(email, role)
 
@@ -78,8 +94,10 @@ def register_user(payload):
             user_id = insert_and_get_id(
                 connection,
                 """
-                INSERT INTO users (email, password, display_name, role, token, avatar_data)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO users (
+                    email, password, display_name, role, token, avatar_data, department, programme_name
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     email,
@@ -88,6 +106,8 @@ def register_user(payload):
                     role,
                     token,
                     None,
+                    department if role == "student" else "",
+                    programme_name if role == "student" else "",
                 ),
             )
             connection.commit()

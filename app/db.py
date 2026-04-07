@@ -111,8 +111,10 @@ def seed_from_store(connection, store):
         db_execute(
             connection,
             """
-            INSERT INTO users (email, password, display_name, role, token, avatar_data)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO users (
+                email, password, display_name, role, token, avatar_data, department, programme_name
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user["email"],
@@ -121,6 +123,8 @@ def seed_from_store(connection, store):
                 user["role"],
                 user["token"],
                 user.get("avatarData"),
+                user.get("department", ""),
+                user.get("programmeName", ""),
             ),
         )
 
@@ -249,7 +253,9 @@ def sqlite_schema():
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
             token TEXT NOT NULL,
-            avatar_data TEXT
+            avatar_data TEXT,
+            department TEXT,
+            programme_name TEXT
         )
         """,
         """
@@ -327,7 +333,9 @@ def postgres_schema():
             display_name TEXT NOT NULL,
             role TEXT NOT NULL,
             token TEXT NOT NULL,
-            avatar_data TEXT
+            avatar_data TEXT,
+            department TEXT,
+            programme_name TEXT
         )
         """,
         """
@@ -436,6 +444,8 @@ def ensure_database():
         for statement in schema:
             db_execute(connection, statement)
         ensure_column(connection, "users", "avatar_data", "TEXT")
+        ensure_column(connection, "users", "department", "TEXT")
+        ensure_column(connection, "users", "programme_name", "TEXT")
         ensure_column(connection, "courses", "study_year", "INTEGER")
         ensure_column(connection, "courses", "semester", "INTEGER")
         ensure_column(connection, "courses", "department", "TEXT")

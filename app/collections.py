@@ -15,7 +15,7 @@ def normalize_number_fields(payload, fields):
     return normalized
 
 
-def list_collection(connection, collection, query):
+def list_collection(connection, collection, query, user=None):
     if collection == "users":
         return query_all(
             connection,
@@ -72,23 +72,39 @@ def list_collection(connection, collection, query):
     params = []
     semester = query.get("semester", [None])[0]
     year = query.get("year", [None])[0]
+    from_sql = "FROM schedules s"
     if semester is not None:
-        clauses.append("semester = ?")
+        clauses.append("s.semester = ?")
         params.append(semester)
     if year is not None:
-        clauses.append("year = ?")
+        clauses.append("s.year = ?")
         params.append(year)
+    if collection == "schedules" and user and user.get("role") == "student":
+        if not user.get("department") or not user.get("programme_name"):
+            return []
+        from_sql += " JOIN courses c ON c.id = s.course_id"
+        clauses.append("c.department = ?")
+        params.append(user["department"])
+        clauses.append("c.programme_name = ?")
+        params.append(user["programme_name"])
+    elif collection == "schedules" and user and user.get("role") == "teacher":
+        from_sql += " LEFT JOIN teachers t ON t.id = s.teacher_id"
+        clauses.append(
+            "(lower(coalesce(t.email, '')) = lower(?) OR lower(coalesce(s.teacher_name, '')) = lower(?))"
+        )
+        params.append(user.get("email", ""))
+        params.append(user.get("display_name", ""))
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return query_all(
         connection,
         f"""
         SELECT
-            id, course_id, course_name, teacher_id, teacher_name, room_id, room_number,
-            day, start_hour, semester, year, algorithm
-        FROM schedules
+            s.id, s.course_id, s.course_name, s.teacher_id, s.teacher_name, s.room_id, s.room_number,
+            s.day, s.start_hour, s.semester, s.year, s.algorithm
+        {from_sql}
         {where_sql}
-        ORDER BY day, start_hour, id
+        ORDER BY s.day, s.start_hour, s.id
         """,
         tuple(params),
     )

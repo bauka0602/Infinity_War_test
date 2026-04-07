@@ -190,7 +190,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             with get_connection() as connection:
                 if len(parts) == 1:
                     if method == "GET":
-                        self.send_json(200, list_collection(connection, collection, query))
+                        self.send_json(200, list_collection(connection, collection, query, user))
                         return
 
                     if method == "POST":
