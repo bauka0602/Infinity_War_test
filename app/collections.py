@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+from .config import TEACHER_EMAIL_DOMAIN
 from .db import db_execute, insert_and_get_id, query_all, query_one
 from .errors import ApiError
 
@@ -13,6 +14,16 @@ def normalize_number_fields(payload, fields):
             except (TypeError, ValueError):
                 pass
     return normalized
+
+
+def validate_teacher_email(email):
+    normalized_email = (email or "").strip().lower()
+    if not normalized_email.endswith(TEACHER_EMAIL_DOMAIN):
+        raise ApiError(
+            400,
+            "teacher_email_domain_required",
+            "Для преподавателя нужен email, оканчивающийся на @kazatu.edu.kz",
+        )
 
 
 def list_collection(connection, collection, query, user=None):
@@ -165,6 +176,7 @@ def create_collection_item(connection, collection, payload):
 
     if collection == "teachers":
         normalized = normalize_number_fields(payload, ["max_hours_per_week"])
+        validate_teacher_email(normalized.get("email"))
         item_id = insert_and_get_id(
             connection,
             """
@@ -364,6 +376,7 @@ def update_collection_item(connection, collection, item_id, payload):
 
     if collection == "teachers":
         normalized = normalize_number_fields(payload, ["max_hours_per_week"])
+        validate_teacher_email(normalized.get("email"))
         db_execute(
             connection,
             """
