@@ -244,8 +244,8 @@ def seed_from_store(connection, store):
         db_execute(
             connection,
             """
-            INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count, lesson_type)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 section.get("course_id"),
@@ -253,6 +253,7 @@ def seed_from_store(connection, store):
                 section.get("group_id"),
                 section.get("group_name", ""),
                 section.get("class_count", section.get("classes_count")),
+                section.get("lesson_type", "lecture"),
             ),
         )
 
@@ -379,7 +380,8 @@ def sqlite_schema():
             course_name TEXT NOT NULL,
             group_id INTEGER,
             group_name TEXT,
-            classes_count INTEGER NOT NULL
+            classes_count INTEGER NOT NULL,
+            lesson_type TEXT DEFAULT 'lecture'
         )
         """,
     ]
@@ -494,7 +496,8 @@ def postgres_schema():
             course_name TEXT NOT NULL,
             group_id INTEGER,
             group_name TEXT,
-            classes_count INTEGER NOT NULL
+            classes_count INTEGER NOT NULL,
+            lesson_type TEXT DEFAULT 'lecture'
         )
         """,
     ]
@@ -711,6 +714,7 @@ def ensure_database():
         ensure_column(connection, "groups", "has_subgroups", "INTEGER DEFAULT 0")
         ensure_column(connection, "sections", "group_id", "INTEGER")
         ensure_column(connection, "sections", "group_name", "TEXT")
+        ensure_column(connection, "sections", "lesson_type", "TEXT DEFAULT 'lecture'")
         ensure_column(connection, "schedules", "section_id", "INTEGER")
         ensure_column(connection, "schedules", "group_id", "INTEGER")
         ensure_column(connection, "schedules", "group_name", "TEXT")

@@ -93,7 +93,7 @@ def list_collection(connection, collection, query, user=None):
         return query_all(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count, lesson_type
             FROM sections
             ORDER BY id
             """,
@@ -271,8 +271,8 @@ def create_collection_item(connection, collection, payload):
         item_id = insert_and_get_id(
             connection,
             """
-            INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count, lesson_type)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized.get("course_id"),
@@ -280,13 +280,14 @@ def create_collection_item(connection, collection, payload):
                 normalized.get("group_id"),
                 normalized.get("group_name", ""),
                 normalized.get("classes_count", normalized.get("class_count")),
+                normalized.get("lesson_type", "lecture"),
             ),
         )
         connection.commit()
         return query_one(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count, lesson_type
             FROM sections
             WHERE id = ?
             """,
@@ -478,7 +479,7 @@ def update_collection_item(connection, collection, item_id, payload):
             connection,
             """
             UPDATE sections
-            SET course_id = ?, course_name = ?, group_id = ?, group_name = ?, classes_count = ?
+            SET course_id = ?, course_name = ?, group_id = ?, group_name = ?, classes_count = ?, lesson_type = ?
             WHERE id = ?
             """,
             (
@@ -487,6 +488,7 @@ def update_collection_item(connection, collection, item_id, payload):
                 normalized.get("group_id"),
                 normalized.get("group_name", ""),
                 normalized.get("classes_count", normalized.get("class_count")),
+                normalized.get("lesson_type", "lecture"),
                 item_id,
             ),
         )
@@ -494,7 +496,7 @@ def update_collection_item(connection, collection, item_id, payload):
         return query_one(
             connection,
             """
-            SELECT id, course_id, course_name, group_id, group_name, classes_count
+            SELECT id, course_id, course_name, group_id, group_name, classes_count, lesson_type
             FROM sections
             WHERE id = ?
             """,

@@ -142,6 +142,10 @@ SECTION_HEADERS = {
     "class_count": "classes_count",
     "количество_занятий": "classes_count",
     "сабақ_саны": "classes_count",
+    "lesson_type": "lesson_type",
+    "type": "lesson_type",
+    "тип_занятия": "lesson_type",
+    "сабақ_түрі": "lesson_type",
 }
 
 REQUIRED_FIELDS = {
@@ -188,7 +192,7 @@ TEMPLATE_HEADERS = {
     "Teachers": ["name", "email", "phone", "department"],
     "Rooms": ["number", "capacity", "building", "type", "department", "available", "equipment"],
     "Groups": ["name", "student_count", "has_subgroups"],
-    "Sections": ["course_code", "group_name", "classes_count"],
+    "Sections": ["course_code", "group_name", "classes_count", "lesson_type"],
 }
 
 TEMPLATE_ROWS = {
@@ -227,7 +231,7 @@ TEMPLATE_ROWS = {
         ["SE-23-01", 24, "yes"],
     ],
     "Sections": [
-        ["CS101", "SE-23-01", 2],
+        ["CS101", "SE-23-01", 2, "lecture"],
     ],
 }
 
@@ -638,7 +642,7 @@ def _upsert_section(connection, payload):
             connection,
             """
             UPDATE sections
-            SET course_id = ?, course_name = ?, group_id = ?, group_name = ?, classes_count = ?
+            SET course_id = ?, course_name = ?, group_id = ?, group_name = ?, classes_count = ?, lesson_type = ?
             WHERE id = ?
             """,
             (
@@ -647,6 +651,7 @@ def _upsert_section(connection, payload):
                 group["id"],
                 group["name"],
                 normalized["classes_count"],
+                normalized.get("lesson_type", "lecture") or "lecture",
                 existing["id"],
             ),
         )
@@ -655,8 +660,8 @@ def _upsert_section(connection, payload):
     insert_and_get_id(
         connection,
         """
-        INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sections (course_id, course_name, group_id, group_name, classes_count, lesson_type)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             course["id"],
@@ -664,6 +669,7 @@ def _upsert_section(connection, payload):
             group["id"],
             group["name"],
             normalized["classes_count"],
+            normalized.get("lesson_type", "lecture") or "lecture",
         ),
     )
     return "inserted"

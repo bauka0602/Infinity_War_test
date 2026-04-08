@@ -321,6 +321,8 @@ def optimize_schedule(payload):
     slot_index_map = {slot["id"]: int(slot["order"]) for slot in slots}
     max_slot_index = max(slot_index_map.values()) if slot_index_map else 0
     days = _unique_preserve_order(slot["day"] for slot in slots)
+    max_classes_per_day_for_teacher = int(payload.get("maxClassesPerDayForTeacher") or 4)
+    max_classes_per_day_for_audience = int(payload.get("maxClassesPerDayForAudience") or 4)
 
     for item in items:
         if item["teacher_id"] not in teacher_map:
@@ -455,6 +457,16 @@ def optimize_schedule(payload):
             if teacher_slot_vars:
                 model.Add(sum(teacher_slot_vars) <= 1)
 
+        for day in days:
+            teacher_day_vars = [
+                use_slot_vars[(item_id, slot["id"])]
+                for item_id in teacher_item_ids
+                for slot in slots
+                if slot["day"] == day and (item_id, slot["id"]) in use_slot_vars
+            ]
+            if teacher_day_vars:
+                model.Add(sum(teacher_day_vars) <= max_classes_per_day_for_teacher)
+
         max_hours = teacher.get("max_hours_per_week")
         if max_hours:
             teacher_vars = [
@@ -478,6 +490,15 @@ def optimize_schedule(payload):
             ]
             if audience_slot_vars:
                 model.Add(sum(audience_slot_vars) <= 1)
+        for day in days:
+            audience_day_vars = [
+                use_slot_vars[(item_id, slot["id"])]
+                for item_id in item_id_set
+                for slot in slots
+                if slot["day"] == day and (item_id, slot["id"]) in use_slot_vars
+            ]
+            if audience_day_vars:
+                model.Add(sum(audience_day_vars) <= max_classes_per_day_for_audience)
 
     precedence_relations = []
     if enforce_lecture_before_lab:
@@ -512,6 +533,10 @@ def optimize_schedule(payload):
                 )
     subgroup_day_separation_pairs = []
     subgroup_same_day_penalty_vars = []
+    teacher_gap_penalty_vars = []
+    audience_gap_penalty_vars = []
+    teacher_building_penalty_vars = []
+    audience_building_penalty_vars = []
 
     if prefer_separate_subgroups_by_day:
         subgroup_items_by_signature = defaultdict(list)
@@ -555,6 +580,181 @@ def optimize_schedule(payload):
                         }
                     )
 
+    slots_by_day = defaultdict(list)
+    for slot in slots:
+        slots_by_day[slot["day"]].append(slot)
+    for day_slots in slots_by_day.values():
+        day_slots.sort(key=lambda slot: int(slot["hour"]))
+
+    for teacher in teachers:
+        teacher_item_ids = set(items_by_teacher[teacher["id"]])
+        for day, day_slots in slots_by_day.items():
+            for left_index in range(len(day_slots)):
+                for right_index in range(left_index + 1, len(day_slots)):
+                    left_slot = day_slots[left_index]
+                    right_slot = day_slots[right_index]
+                    gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
+                    if gap_size <= 0:
+                        continue
+
+                    left_vars = [
+                        use_slot_vars[(item_id, left_slot["id"])]
+                        for item_id in teacher_item_ids
+                        if (item_id, left_slot["id"]) in use_slot_vars
+                    ]
+                    right_vars = [
+                        use_slot_vars[(item_id, right_slot["id"])]
+                        for item_id in teacher_item_ids
+                        if (item_id, right_slot["id"]) in use_slot_vars
+                    ]
+                    if not left_vars or not right_vars:
+                        continue
+
+                    left_used = model.NewBoolVar(
+                        f"teacher_left_used__{teacher['id']}__{day}__{left_slot['hour']}"
+                    )
+                    right_used = model.NewBoolVar(
+                        f"teacher_right_used__{teacher['id']}__{day}__{right_slot['hour']}"
+                    )
+                    model.AddMaxEquality(left_used, left_vars)
+                    model.AddMaxEquality(right_used, right_vars)
+
+                    gap_var = model.NewBoolVar(
+                        f"teacher_gap__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}"
+                    )
+                    model.Add(gap_var <= left_used)
+                    model.Add(gap_var <= right_used)
+                    model.Add(gap_var >= left_used + right_used - 1)
+                    teacher_gap_penalty_vars.extend([gap_var] * gap_size)
+
+    def _collect_building_choice_vars(item_ids, slot_id):
+        result = defaultdict(list)
+        for (item_id, current_slot_id, room_id), var in decision_vars.items():
+            if item_id in item_ids and current_slot_id == slot_id:
+                building = room_map[room_id]["building"] or ""
+                result[building].append(var)
+        return result
+
+    def _building_used_var(prefix, item_ids, slot_id, building):
+        building_vars = [
+            var
+            for (item_id, current_slot_id, room_id), var in decision_vars.items()
+            if item_id in item_ids
+            and current_slot_id == slot_id
+            and (room_map[room_id]["building"] or "") == building
+        ]
+        if not building_vars:
+            return None
+        used_var = model.NewBoolVar(f"{prefix}__{slot_id}__{building or 'empty'}")
+        model.AddMaxEquality(used_var, building_vars)
+        return used_var
+
+    for teacher in teachers:
+        teacher_item_ids = set(items_by_teacher[teacher["id"]])
+        for day, day_slots in slots_by_day.items():
+            for left_slot, right_slot in zip(day_slots, day_slots[1:]):
+                left_buildings = _collect_building_choice_vars(teacher_item_ids, left_slot["id"])
+                right_buildings = _collect_building_choice_vars(teacher_item_ids, right_slot["id"])
+                if not left_buildings or not right_buildings:
+                    continue
+                for left_building, left_vars in left_buildings.items():
+                    for right_building, right_vars in right_buildings.items():
+                        if left_building == right_building:
+                            continue
+                        left_used = _building_used_var(
+                            f"teacher_building_left__{teacher['id']}__{day}__{left_slot['hour']}",
+                            teacher_item_ids,
+                            left_slot["id"],
+                            left_building,
+                        )
+                        right_used = _building_used_var(
+                            f"teacher_building_right__{teacher['id']}__{day}__{right_slot['hour']}",
+                            teacher_item_ids,
+                            right_slot["id"],
+                            right_building,
+                        )
+                        if left_used is None or right_used is None:
+                            continue
+                        transition_var = model.NewBoolVar(
+                            f"teacher_building_transition__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
+                        )
+                        model.Add(transition_var <= left_used)
+                        model.Add(transition_var <= right_used)
+                        model.Add(transition_var >= left_used + right_used - 1)
+                        teacher_building_penalty_vars.append(transition_var)
+
+    for audience_key, audience_item_ids in audience_to_items.items():
+        item_id_set = set(audience_item_ids)
+        for day, day_slots in slots_by_day.items():
+            for left_index in range(len(day_slots)):
+                for right_index in range(left_index + 1, len(day_slots)):
+                    left_slot = day_slots[left_index]
+                    right_slot = day_slots[right_index]
+                    gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
+                    if gap_size <= 0:
+                        continue
+
+                    left_vars = [
+                        use_slot_vars[(item_id, left_slot["id"])]
+                        for item_id in item_id_set
+                        if (item_id, left_slot["id"]) in use_slot_vars
+                    ]
+                    right_vars = [
+                        use_slot_vars[(item_id, right_slot["id"])]
+                        for item_id in item_id_set
+                        if (item_id, right_slot["id"]) in use_slot_vars
+                    ]
+                    if not left_vars or not right_vars:
+                        continue
+
+                    left_used = model.NewBoolVar(
+                        f"aud_left_used__{audience_key}__{day}__{left_slot['hour']}"
+                    )
+                    right_used = model.NewBoolVar(
+                        f"aud_right_used__{audience_key}__{day}__{right_slot['hour']}"
+                    )
+                    model.AddMaxEquality(left_used, left_vars)
+                    model.AddMaxEquality(right_used, right_vars)
+
+                    gap_var = model.NewBoolVar(
+                        f"aud_gap__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}"
+                    )
+                    model.Add(gap_var <= left_used)
+                    model.Add(gap_var <= right_used)
+                    model.Add(gap_var >= left_used + right_used - 1)
+                    audience_gap_penalty_vars.extend([gap_var] * gap_size)
+
+            for left_slot, right_slot in zip(day_slots, day_slots[1:]):
+                left_buildings = _collect_building_choice_vars(item_id_set, left_slot["id"])
+                right_buildings = _collect_building_choice_vars(item_id_set, right_slot["id"])
+                if not left_buildings or not right_buildings:
+                    continue
+                for left_building in left_buildings:
+                    for right_building in right_buildings:
+                        if left_building == right_building:
+                            continue
+                        left_used = _building_used_var(
+                            f"aud_building_left__{audience_key}__{day}__{left_slot['hour']}",
+                            item_id_set,
+                            left_slot["id"],
+                            left_building,
+                        )
+                        right_used = _building_used_var(
+                            f"aud_building_right__{audience_key}__{day}__{right_slot['hour']}",
+                            item_id_set,
+                            right_slot["id"],
+                            right_building,
+                        )
+                        if left_used is None or right_used is None:
+                            continue
+                        transition_var = model.NewBoolVar(
+                            f"aud_building_transition__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
+                        )
+                        model.Add(transition_var <= left_used)
+                        model.Add(transition_var <= right_used)
+                        model.Add(transition_var >= left_used + right_used - 1)
+                        audience_building_penalty_vars.append(transition_var)
+
     objective_terms = []
     for (item_id, slot_id, room_id), var in decision_vars.items():
         item = items_by_id[item_id]
@@ -568,6 +768,14 @@ def optimize_schedule(payload):
     if subgroup_same_day_penalty_vars:
         penalty_weight = 25
         objective_terms.extend(-penalty_weight * var for var in subgroup_same_day_penalty_vars)
+    if teacher_gap_penalty_vars:
+        objective_terms.extend(-12 * var for var in teacher_gap_penalty_vars)
+    if audience_gap_penalty_vars:
+        objective_terms.extend(-14 * var for var in audience_gap_penalty_vars)
+    if teacher_building_penalty_vars:
+        objective_terms.extend(-10 * var for var in teacher_building_penalty_vars)
+    if audience_building_penalty_vars:
+        objective_terms.extend(-8 * var for var in audience_building_penalty_vars)
 
     model.Maximize(sum(objective_terms))
 
@@ -630,6 +838,8 @@ def optimize_schedule(payload):
         "audienceUsage": {audience_key: usage for audience_key, usage in audience_usage.items()},
         "precedenceRelations": precedence_relations,
         "preferLowerFloors": prefer_lower_floors,
+        "maxClassesPerDayForTeacher": max_classes_per_day_for_teacher,
+        "maxClassesPerDayForAudience": max_classes_per_day_for_audience,
         "preferSeparateSubgroupsByDay": prefer_separate_subgroups_by_day,
         "subgroupSeparationPairs": len(subgroup_day_separation_pairs),
     }

@@ -1,14 +1,148 @@
-import math
 from datetime import date, timedelta
 
 from .db import db_execute, db_executemany, query_all
 from .errors import ApiError
+from .optimizer import optimize_schedule
+
+DAY_NAME_TO_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+}
 
 
 def monday_for_week(target_year):
     today = date.today()
     anchor = date(target_year, today.month, today.day)
     return anchor - timedelta(days=anchor.weekday())
+
+
+def _build_optimizer_payload(sections, teachers, rooms):
+    plan_items = []
+    grouped_lectures = {}
+    standalone_items = []
+
+    for section in sections:
+        base_group_id = section["group_name"] or str(section["group_id"])
+        lesson_type = (section.get("lesson_type") or "lecture").strip().lower()
+        base_item = {
+            "courseId": section["course_id"],
+            "courseName": section["course_name"],
+            "teacherId": section["instructor_id"],
+            "teacherName": section["instructor_name"],
+            "groupIds": [base_group_id],
+            "lessonsPerWeek": int(section.get("classes_count") or 0),
+            "studentCount": int(section.get("student_count") or 0),
+            "preferredBuildings": [],
+            "preferredDays": [],
+            "preferredHours": [],
+            "forbiddenSlots": [],
+            "lessonType": lesson_type,
+        }
+
+        if lesson_type == "lecture":
+            signature = (
+                section["course_id"],
+                section["instructor_id"],
+                int(section.get("classes_count") or 0),
+            )
+            grouped_lectures.setdefault(signature, []).append(section)
+        elif section.get("has_subgroups"):
+            subgroup_size = max(1, int((section.get("student_count") or 0) / 2))
+            for subgroup in ("A", "B"):
+                standalone_items.append(
+                    {
+                        **base_item,
+                        "id": f"section_{section['id']}_{subgroup}",
+                        "lessonType": lesson_type,
+                        "roomTypeRequired": "lab" if lesson_type == "lab" else "practical",
+                        "streamId": f"{section['course_id']}-{section['group_id']}",
+                        "subgroupIds": [f"{base_group_id}-{subgroup}"],
+                        "studentCount": subgroup_size,
+                        "pcRequired": False,
+                    }
+                )
+        else:
+            standalone_items.append(
+                {
+                    **base_item,
+                    "id": f"section_{section['id']}",
+                    "lessonType": lesson_type,
+                    "roomTypeRequired": "lab" if lesson_type == "lab" else "practical",
+                    "streamId": f"{section['course_id']}-{section['group_id']}",
+                    "subgroupIds": [],
+                    "pcRequired": False,
+                }
+            )
+
+    for (course_id, instructor_id, classes_count), lecture_sections in grouped_lectures.items():
+        first_section = lecture_sections[0]
+        plan_items.append(
+            {
+                "id": "stream_"
+                + "_".join(str(section["id"]) for section in lecture_sections),
+                "courseId": course_id,
+                "courseName": first_section["course_name"],
+                "teacherId": instructor_id,
+                "teacherName": first_section["instructor_name"],
+                "groupIds": [section["group_name"] or str(section["group_id"]) for section in lecture_sections],
+                "lessonsPerWeek": classes_count,
+                "studentCount": sum(int(section.get("student_count") or 0) for section in lecture_sections),
+                "preferredBuildings": [],
+                "preferredDays": [],
+                "preferredHours": [],
+                "forbiddenSlots": [],
+                "lessonType": "lecture",
+                "roomTypeRequired": "lecture",
+                "subgroupIds": [],
+                "streamId": f"lecture-{course_id}-{instructor_id}",
+            }
+        )
+
+    plan_items.extend(standalone_items)
+
+    return {
+        "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        "hours": list(range(8, 18)),
+        "preferSeparateSubgroupsByDay": False,
+        "preferLowerFloors": True,
+        "enforceLectureBeforeLab": True,
+        "maxClassesPerDayForTeacher": 4,
+        "maxClassesPerDayForAudience": 4,
+        "maxSolveTimeSeconds": 10,
+        "numWorkers": 8,
+        "teachers": [
+            {
+                "id": teacher["id"],
+                "name": teacher["name"],
+                "maxHoursPerWeek": teacher.get("weekly_hours_limit"),
+                "availability": [],
+            }
+            for teacher in teachers
+        ],
+        "rooms": [
+            {
+                "id": room["id"],
+                "number": room["number"],
+                "capacity": int(room.get("capacity") or 0),
+                "type": room.get("type") or "",
+                "building": room.get("building") or "",
+                "floor": None,
+                "pcCount": 0,
+            }
+            for room in rooms
+        ],
+        "planItems": plan_items,
+    }
+
+
+def _day_to_iso(selected_monday, day_name):
+    day_index = DAY_NAME_TO_INDEX.get((day_name or "").strip().lower())
+    if day_index is None:
+        raise ApiError(400, "bad_request", f"Неизвестный день в оптимизаторе: {day_name}")
+    return (selected_monday + timedelta(days=day_index)).isoformat()
 
 
 def build_schedule(connection, semester, year, algorithm):
@@ -22,8 +156,10 @@ def build_schedule(connection, semester, year, algorithm):
             s.group_id,
             s.group_name,
             s.classes_count,
+            s.lesson_type,
             c.instructor_id,
             c.instructor_name,
+            c.department,
             c.semester,
             c.year,
             g.student_count,
@@ -31,16 +167,23 @@ def build_schedule(connection, semester, year, algorithm):
         FROM sections s
         JOIN courses c ON c.id = s.course_id
         JOIN groups g ON g.id = s.group_id
-        WHERE c.semester = ?
-        ORDER BY s.id
+        WHERE c.semester = ? AND c.year = ?
+        ORDER BY g.student_count DESC, s.classes_count DESC, s.id
         """,
-        (semester,),
+        (semester, year),
     )
-    teachers = query_all(connection, "SELECT id, name FROM teachers ORDER BY id")
+    teachers = query_all(
+        connection,
+        """
+        SELECT id, name, weekly_hours_limit
+        FROM teachers
+        ORDER BY id
+        """,
+    )
     rooms = query_all(
         connection,
         """
-        SELECT id, number, capacity, available
+        SELECT id, number, capacity, available, type, building, department
         FROM rooms
         WHERE available = 1
         ORDER BY capacity, id
@@ -54,91 +197,100 @@ def build_schedule(connection, semester, year, algorithm):
             "Для генерации расписания нужны секции, преподаватели, группы и аудитории.",
         )
 
-    start_day = monday_for_week(year)
-    slots = [(day_idx, hour) for day_idx in range(5) for hour in range(8, 18)]
-    generated = []
-    teacher_busy = set()
-    room_busy = set()
-    group_busy = set()
-
-    def pick_room(required_capacity, day_idx, hour):
-        for room in rooms:
-            room_capacity = room.get("capacity") or 0
-            if room_capacity < required_capacity:
-                continue
-            if (room["id"], day_idx, hour) in room_busy:
-                continue
-            return room
-        return None
-
     for section in sections:
-        teacher = next(
-            (
-                existing_teacher
-                for existing_teacher in teachers
-                if existing_teacher["id"] == section.get("instructor_id")
-            ),
-            None,
-        )
-        if teacher is None:
+        if not section.get("instructor_id"):
             raise ApiError(
                 400,
                 "bad_request",
                 f"Для курса '{section['course_name']}' не найден преподаватель.",
             )
 
-        subgroup_labels = [""] if not section.get("has_subgroups") else ["A", "B"]
-        subgroup_size = (
-            math.ceil((section.get("student_count") or 0) / 2)
-            if section.get("has_subgroups")
-            else section.get("student_count") or 0
+    payload = _build_optimizer_payload(sections, teachers, rooms)
+    optimization_result = optimize_schedule(payload)
+    generated_items = optimization_result.get("schedule") or []
+    selected_monday = monday_for_week(year)
+
+    section_lookup = {}
+    for section in sections:
+        lesson_type = (section.get("lesson_type") or "lecture").strip().lower()
+        if lesson_type == "lecture":
+            continue
+        section_lookup[f"section_{section['id']}"] = [
+            {
+                "section_id": section["id"],
+                "group_id": section["group_id"],
+                "group_name": section["group_name"],
+                "subgroup": "",
+            }
+        ]
+        if section.get("has_subgroups"):
+            section_lookup[f"section_{section['id']}_A"] = {
+                "section_id": section["id"],
+                "group_id": section["group_id"],
+                "group_name": section["group_name"],
+                "subgroup": "A",
+            }
+            section_lookup[f"section_{section['id']}_B"] = {
+                "section_id": section["id"],
+                "group_id": section["group_id"],
+                "group_name": section["group_name"],
+                "subgroup": "B",
+            }
+
+    lecture_groups = {}
+    for section in sections:
+        lesson_type = (section.get("lesson_type") or "lecture").strip().lower()
+        if lesson_type != "lecture":
+            continue
+        signature = (
+            section["course_id"],
+            section["instructor_id"],
+            int(section.get("classes_count") or 0),
         )
+        lecture_groups.setdefault(signature, []).append(section)
+    for signature, lecture_sections in lecture_groups.items():
+        item_id = "stream_" + "_".join(str(section["id"]) for section in lecture_sections)
+        section_lookup[item_id] = [
+            {
+                "section_id": section["id"],
+                "group_id": section["group_id"],
+                "group_name": section["group_name"],
+                "subgroup": "",
+            }
+            for section in lecture_sections
+        ]
 
-        for class_index in range(section.get("classes_count") or 0):
-            for subgroup in subgroup_labels:
-                placed = False
-                for day_idx, hour in slots:
-                    teacher_key = (teacher["id"], day_idx, hour)
-                    group_key = (section["group_id"], day_idx, hour)
-                    if teacher_key in teacher_busy or group_key in group_busy:
-                        continue
-
-                    room = pick_room(subgroup_size, day_idx, hour)
-                    if room is None:
-                        continue
-
-                    teacher_busy.add(teacher_key)
-                    group_busy.add(group_key)
-                    room_busy.add((room["id"], day_idx, hour))
-                    generated.append(
-                        (
-                            section["id"],
-                            section["course_id"],
-                            section["course_name"],
-                            teacher["id"],
-                            teacher["name"],
-                            room["id"],
-                            room["number"],
-                            section["group_id"],
-                            section["group_name"],
-                            subgroup,
-                            (start_day + timedelta(days=day_idx)).isoformat(),
-                            hour,
-                            semester,
-                            year,
-                            algorithm,
-                        )
-                    )
-                    placed = True
-                    break
-
-                if not placed:
-                    subgroup_label = f" ({subgroup})" if subgroup else ""
-                    raise ApiError(
-                        400,
-                        "bad_request",
-                        f"Не удалось разместить {section['course_name']} для группы {section['group_name']}{subgroup_label}.",
-                    )
+    rows = []
+    for item in generated_items:
+        section_entries = section_lookup.get(item["itemId"])
+        if section_entries is None:
+            raise ApiError(
+                400,
+                "bad_request",
+                f"Оптимизатор вернул неизвестную секцию: {item['itemId']}",
+            )
+        if isinstance(section_entries, dict):
+            section_entries = [section_entries]
+        for section_meta in section_entries:
+            rows.append(
+                (
+                    section_meta["section_id"],
+                    item.get("courseId"),
+                    item.get("courseName"),
+                    item.get("teacherId"),
+                    item.get("teacherName"),
+                    item.get("roomId"),
+                    item.get("roomNumber"),
+                    section_meta["group_id"],
+                    section_meta["group_name"],
+                    section_meta["subgroup"],
+                    _day_to_iso(selected_monday, item.get("day")),
+                    int(item.get("hour")),
+                    semester,
+                    year,
+                    algorithm or "optimizer",
+                )
+            )
 
     db_execute(connection, "DELETE FROM schedules")
     db_executemany(
@@ -150,7 +302,7 @@ def build_schedule(connection, semester, year, algorithm):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        generated,
+        rows,
     )
     connection.commit()
 
