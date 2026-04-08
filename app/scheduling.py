@@ -190,11 +190,24 @@ def build_schedule(connection, semester, year, algorithm):
         """,
     )
 
-    if not sections or not teachers or not rooms:
+    missing_parts = []
+    if not sections:
+        missing_parts.append(f"секции для {semester} семестра {year} года")
+    if not teachers:
+        missing_parts.append("преподаватели")
+    if not rooms:
+        missing_parts.append("доступные аудитории")
+
+    if missing_parts:
         raise ApiError(
             400,
             "schedule_generation_requires_data",
-            "Для генерации расписания нужны секции, преподаватели, группы и аудитории.",
+            "Недостаточно данных для генерации расписания.",
+            details={
+                "semester": semester,
+                "year": year,
+                "missing": missing_parts,
+            },
         )
 
     for section in sections:
