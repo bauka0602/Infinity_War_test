@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from .db import db_execute, db_executemany, query_all
 from .errors import ApiError
 from .optimizer import optimize_schedule
+from .preference_service import get_approved_teacher_preferences
 
 DAY_NAME_TO_INDEX = {
     "monday": 0,
@@ -19,7 +20,7 @@ def monday_for_week(target_year):
     return anchor - timedelta(days=anchor.weekday())
 
 
-def _build_optimizer_payload(sections, teachers, rooms):
+def _build_optimizer_payload(sections, teachers, rooms, teacher_preferences):
     plan_items = []
     grouped_lectures = {}
     standalone_items = []
@@ -38,6 +39,7 @@ def _build_optimizer_payload(sections, teachers, rooms):
             "preferredBuildings": [],
             "preferredDays": [],
             "preferredHours": [],
+            "preferredSlots": teacher_preferences.get(section["instructor_id"], []),
             "forbiddenSlots": [],
             "lessonType": lesson_type,
         }
@@ -221,7 +223,17 @@ def build_schedule(connection, semester, year, algorithm):
                 f"Для курса '{section['course_name']}' не найден преподаватель.",
             )
 
-    payload = _build_optimizer_payload(sections, teachers, rooms)
+    teacher_preference_rows = get_approved_teacher_preferences(connection)
+    teacher_preferences = {}
+    for row in teacher_preference_rows:
+        teacher_preferences.setdefault(row["teacher_id"], []).append(
+            {
+                "day": row["preferred_day"].capitalize(),
+                "hour": int(row["preferred_hour"]),
+            }
+        )
+
+    payload = _build_optimizer_payload(sections, teachers, rooms, teacher_preferences)
     optimization_result = optimize_schedule(payload)
     generated_items = optimization_result.get("schedule") or []
     selected_monday = monday_for_week(year)

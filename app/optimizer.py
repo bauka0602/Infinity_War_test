@@ -174,6 +174,14 @@ def _normalize_plan_items(payload):
                 continue
             forbidden_slots.add((str(day), int(hour)))
 
+        preferred_slots = set()
+        for raw in item.get("preferredSlots") or []:
+            day = raw.get("day")
+            hour = raw.get("hour")
+            if day is None or hour is None:
+                continue
+            preferred_slots.add((str(day), int(hour)))
+
         lesson_type = _normalize_text(item.get("lessonType") or item.get("type") or "")
         room_type_required = _normalize_text(
             item.get("roomTypeRequired") or item.get("roomType") or ""
@@ -215,6 +223,7 @@ def _normalize_plan_items(payload):
                 "pc_required": pc_required,
                 "preferred_days": {str(day) for day in (item.get("preferredDays") or [])},
                 "preferred_hours": {int(hour) for hour in (item.get("preferredHours") or [])},
+                "preferred_slots": preferred_slots,
                 "preferred_buildings": {str(v) for v in (item.get("preferredBuildings") or [])},
                 "forbidden_slots": forbidden_slots,
                 "precedence_signature": precedence_signature,
@@ -225,6 +234,8 @@ def _normalize_plan_items(payload):
 
 def _slot_score(slot, item):
     score = 0
+    if item["preferred_slots"] and (slot["day"], slot["hour"]) in item["preferred_slots"]:
+        score += 30
     if item["preferred_days"] and slot["day"] in item["preferred_days"]:
         score += 20
     if item["preferred_hours"] and slot["hour"] in item["preferred_hours"]:

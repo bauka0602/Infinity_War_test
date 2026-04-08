@@ -132,6 +132,24 @@ def _build_message(action, before_item, after_item):
     return subject, "\n".join(lines)
 
 
+def _build_regeneration_message(semester, year, before_items, after_items):
+    before_count = len(before_items or [])
+    after_count = len(after_items or [])
+    subject = f"Расписание обновлено: {semester} семестр {year}"
+    body = "\n".join(
+        [
+            "Расписание было перегенерировано администратором.",
+            f"Семестр: {semester}",
+            f"Год: {year}",
+            f"Было занятий: {before_count}",
+            f"Стало занятий: {after_count}",
+            "",
+            "Проверьте актуальное расписание в системе TimeTableG.",
+        ]
+    )
+    return subject, body
+
+
 def _collect_teacher_recipient(connection, schedule_item):
     teacher_id = schedule_item.get("teacher_id")
     if not teacher_id or not EMAIL_NOTIFY_TEACHERS:
@@ -243,5 +261,30 @@ def send_schedule_change_notifications(connection, action, before_item=None, aft
             sent_count += 1
         except Exception:
             logger.exception("Failed to send schedule change email to %s", recipient["email"])
+
+    return {"sent": sent_count, "skipped": False}
+
+
+def send_schedule_regeneration_notifications(connection, semester, year, before_items, after_items):
+    if not notifications_configured():
+        return {"sent": 0, "skipped": True}
+
+    recipients = {}
+    for schedule_item in [*(before_items or []), *(after_items or [])]:
+        for recipient in _collect_recipients(connection, schedule_item):
+            recipients[recipient["key"]] = recipient
+
+    if not recipients:
+        return {"sent": 0, "skipped": True}
+
+    subject, body = _build_regeneration_message(semester, year, before_items, after_items)
+    sent_count = 0
+
+    for recipient in recipients.values():
+        try:
+            _send_email(recipient, subject, body)
+            sent_count += 1
+        except Exception:
+            logger.exception("Failed to send regeneration email to %s", recipient["email"])
 
     return {"sent": sent_count, "skipped": False}

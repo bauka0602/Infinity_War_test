@@ -21,6 +21,11 @@ from .errors import ApiError
 from .import_service import generate_import_template, generate_schedule_export, import_excel_data
 from .job_store import create_schedule_generation_job, get_schedule_generation_job
 from .notification_service import send_schedule_change_notifications
+from .preference_service import (
+    create_teacher_preference_request,
+    list_teacher_preference_requests,
+    update_teacher_preference_status,
+)
 from .scheduling import build_schedule
 
 
@@ -122,6 +127,26 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             if api_path == "/profile/avatar" and method == "POST":
                 self.send_json(200, update_profile_avatar(self.headers, self.read_json()))
+                return
+
+            if api_path == "/teacher-preferences/mine" and method == "GET":
+                self.send_json(200, list_teacher_preference_requests(self.headers, mine=True))
+                return
+
+            if api_path == "/teacher-preferences" and method == "GET":
+                self.send_json(200, list_teacher_preference_requests(self.headers, mine=False))
+                return
+
+            if api_path == "/teacher-preferences" and method == "POST":
+                self.send_json(201, create_teacher_preference_request(self.headers, self.read_json()))
+                return
+
+            if api_path.startswith("/teacher-preferences/") and api_path.endswith("/status") and method == "PUT":
+                request_id = api_path.split("/")[-2]
+                self.send_json(
+                    200,
+                    update_teacher_preference_status(self.headers, int(request_id), self.read_json()),
+                )
                 return
 
             if api_path == "/public/groups" and method == "GET":

@@ -384,6 +384,20 @@ def sqlite_schema():
             lesson_type TEXT DEFAULT 'lecture'
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS teacher_preference_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teacher_id INTEGER NOT NULL,
+            teacher_name TEXT NOT NULL,
+            preferred_day TEXT NOT NULL,
+            preferred_hour INTEGER NOT NULL,
+            note TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            admin_comment TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
     ]
 
 
@@ -498,6 +512,20 @@ def postgres_schema():
             group_name TEXT,
             classes_count INTEGER NOT NULL,
             lesson_type TEXT DEFAULT 'lecture'
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS teacher_preference_requests (
+            id SERIAL PRIMARY KEY,
+            teacher_id INTEGER NOT NULL,
+            teacher_name TEXT NOT NULL,
+            preferred_day TEXT NOT NULL,
+            preferred_hour INTEGER NOT NULL,
+            note TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            admin_comment TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         """,
     ]
@@ -719,6 +747,11 @@ def ensure_database():
         ensure_column(connection, "schedules", "group_id", "INTEGER")
         ensure_column(connection, "schedules", "group_name", "TEXT")
         ensure_column(connection, "schedules", "subgroup", "TEXT")
+        ensure_column(connection, "teacher_preference_requests", "note", "TEXT")
+        ensure_column(connection, "teacher_preference_requests", "status", "TEXT DEFAULT 'pending'")
+        ensure_column(connection, "teacher_preference_requests", "admin_comment", "TEXT")
+        ensure_column(connection, "teacher_preference_requests", "created_at", "TEXT")
+        ensure_column(connection, "teacher_preference_requests", "updated_at", "TEXT")
         migrate_default_user_emails(connection)
         migrate_legacy_role_accounts(connection)
         connection.commit()
