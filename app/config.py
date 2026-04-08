@@ -3,6 +3,13 @@ import threading
 from pathlib import Path
 
 
+def env_flag(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_env_file(env_path):
     if not env_path.exists():
         return
@@ -42,5 +49,17 @@ raw_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS = [
     origin.strip() for origin in raw_allowed_origins.split(",") if origin.strip()
 ]
+
+EMAIL_NOTIFICATIONS_ENABLED = env_flag("EMAIL_NOTIFICATIONS_ENABLED", False)
+EMAIL_NOTIFY_TEACHERS = env_flag("EMAIL_NOTIFY_TEACHERS", True)
+EMAIL_NOTIFY_STUDENTS = env_flag("EMAIL_NOTIFY_STUDENTS", True)
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip()
+SMTP_USE_TLS = env_flag("SMTP_USE_TLS", True)
+SMTP_USE_SSL = env_flag("SMTP_USE_SSL", False)
+SMTP_TIMEOUT_SECONDS = float(os.getenv("SMTP_TIMEOUT_SECONDS", "10"))
 
 DB_LOCK = threading.Lock()
