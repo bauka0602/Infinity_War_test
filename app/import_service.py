@@ -709,7 +709,8 @@ def import_excel_data(headers, payload):
                 recognized_sheets.append(sheet.title)
                 parsed_sheets[entity_name] = _read_sheet_rows(sheet, sheet_map[entity_name])
 
-            for entity_name in ("courses", "teachers", "rooms", "groups", "sections"):
+            # Teachers must be imported before courses so instructor_name can resolve to instructor_id.
+            for entity_name in ("teachers", "courses", "rooms", "groups", "sections"):
                 rows = parsed_sheets.get(entity_name, [])
                 for row_index, row_payload in rows:
                     _validate_required_fields(entity_name, row_index, row_payload)
