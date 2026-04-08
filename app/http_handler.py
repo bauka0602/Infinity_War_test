@@ -17,6 +17,7 @@ from .config import ALLOWED_ORIGINS, DB_ENGINE, DB_LOCK
 from .db import get_connection, query_all, query_one
 from .errors import ApiError
 from .import_service import generate_import_template, generate_schedule_export, import_excel_data
+from .job_store import create_schedule_generation_job, get_schedule_generation_job
 from .scheduling import build_schedule
 
 
@@ -170,6 +171,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.handle_schedule_generation()
                 return
 
+            if api_path.startswith("/schedules/generate/") and method == "GET":
+                self.handle_schedule_generation_status(api_path)
+                return
+
             self.handle_collection_routes(method, api_path, parse_qs(parsed.query))
         except ApiError as exc:
             payload = {"error": exc.message, "errorCode": exc.code}
@@ -284,9 +289,20 @@ class ApiHandler(BaseHTTPRequestHandler):
         semester = int(payload.get("semester") or 1)
         year = int(payload.get("year") or date.today().year)
         algorithm = payload.get("algorithm") or "greedy"
+        job = create_schedule_generation_job(semester, year, algorithm)
+        self.send_json(202, job)
 
-        with DB_LOCK:
-            with get_connection() as connection:
-                generated = build_schedule(connection, semester, year, algorithm)
+    def handle_schedule_generation_status(self, api_path):
+        try:
+            user = require_auth_user(self.headers)
+        except ApiError as exc:
+            self.send_json(exc.status, {"error": exc.message, "errorCode": exc.code})
+            return
 
-        self.send_json(200, generated)
+        if user["role"] != "admin":
+            self.send_json(403, {"error": "Недостаточно прав", "errorCode": "forbidden"})
+            return
+
+        job_id = api_path.rsplit("/", 1)[-1]
+        job = get_schedule_generation_job(job_id)
+        self.send_json(200, job)

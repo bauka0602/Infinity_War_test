@@ -111,8 +111,11 @@ def _build_optimizer_payload(sections, teachers, rooms):
         "enforceLectureBeforeLab": True,
         "maxClassesPerDayForTeacher": 4,
         "maxClassesPerDayForAudience": 4,
-        "maxSolveTimeSeconds": 10,
-        "numWorkers": 8,
+        # Render free instances are memory-constrained, so keep the solver lean by default.
+        "enableGapPenalties": False,
+        "enableBuildingTransitionPenalties": False,
+        "maxSolveTimeSeconds": 6,
+        "numWorkers": 1,
         "teachers": [
             {
                 "id": teacher["id"],

@@ -378,6 +378,10 @@ def optimize_schedule(payload):
     prefer_separate_subgroups_by_day = _normalize_bool(
         payload.get("preferSeparateSubgroupsByDay", False)
     )
+    enable_gap_penalties = _normalize_bool(payload.get("enableGapPenalties", True))
+    enable_building_transition_penalties = _normalize_bool(
+        payload.get("enableBuildingTransitionPenalties", True)
+    )
 
     items_by_id = {item["id"]: item for item in items}
 
@@ -586,46 +590,47 @@ def optimize_schedule(payload):
     for day_slots in slots_by_day.values():
         day_slots.sort(key=lambda slot: int(slot["hour"]))
 
-    for teacher in teachers:
-        teacher_item_ids = set(items_by_teacher[teacher["id"]])
-        for day, day_slots in slots_by_day.items():
-            for left_index in range(len(day_slots)):
-                for right_index in range(left_index + 1, len(day_slots)):
-                    left_slot = day_slots[left_index]
-                    right_slot = day_slots[right_index]
-                    gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
-                    if gap_size <= 0:
-                        continue
+    if enable_gap_penalties:
+        for teacher in teachers:
+            teacher_item_ids = set(items_by_teacher[teacher["id"]])
+            for day, day_slots in slots_by_day.items():
+                for left_index in range(len(day_slots)):
+                    for right_index in range(left_index + 1, len(day_slots)):
+                        left_slot = day_slots[left_index]
+                        right_slot = day_slots[right_index]
+                        gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
+                        if gap_size <= 0:
+                            continue
 
-                    left_vars = [
-                        use_slot_vars[(item_id, left_slot["id"])]
-                        for item_id in teacher_item_ids
-                        if (item_id, left_slot["id"]) in use_slot_vars
-                    ]
-                    right_vars = [
-                        use_slot_vars[(item_id, right_slot["id"])]
-                        for item_id in teacher_item_ids
-                        if (item_id, right_slot["id"]) in use_slot_vars
-                    ]
-                    if not left_vars or not right_vars:
-                        continue
+                        left_vars = [
+                            use_slot_vars[(item_id, left_slot["id"])]
+                            for item_id in teacher_item_ids
+                            if (item_id, left_slot["id"]) in use_slot_vars
+                        ]
+                        right_vars = [
+                            use_slot_vars[(item_id, right_slot["id"])]
+                            for item_id in teacher_item_ids
+                            if (item_id, right_slot["id"]) in use_slot_vars
+                        ]
+                        if not left_vars or not right_vars:
+                            continue
 
-                    left_used = model.NewBoolVar(
-                        f"teacher_left_used__{teacher['id']}__{day}__{left_slot['hour']}"
-                    )
-                    right_used = model.NewBoolVar(
-                        f"teacher_right_used__{teacher['id']}__{day}__{right_slot['hour']}"
-                    )
-                    model.AddMaxEquality(left_used, left_vars)
-                    model.AddMaxEquality(right_used, right_vars)
+                        left_used = model.NewBoolVar(
+                            f"teacher_left_used__{teacher['id']}__{day}__{left_slot['hour']}"
+                        )
+                        right_used = model.NewBoolVar(
+                            f"teacher_right_used__{teacher['id']}__{day}__{right_slot['hour']}"
+                        )
+                        model.AddMaxEquality(left_used, left_vars)
+                        model.AddMaxEquality(right_used, right_vars)
 
-                    gap_var = model.NewBoolVar(
-                        f"teacher_gap__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}"
-                    )
-                    model.Add(gap_var <= left_used)
-                    model.Add(gap_var <= right_used)
-                    model.Add(gap_var >= left_used + right_used - 1)
-                    teacher_gap_penalty_vars.extend([gap_var] * gap_size)
+                        gap_var = model.NewBoolVar(
+                            f"teacher_gap__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}"
+                        )
+                        model.Add(gap_var <= left_used)
+                        model.Add(gap_var <= right_used)
+                        model.Add(gap_var >= left_used + right_used - 1)
+                        teacher_gap_penalty_vars.extend([gap_var] * gap_size)
 
     def _collect_building_choice_vars(item_ids, slot_id):
         result = defaultdict(list)
@@ -649,111 +654,115 @@ def optimize_schedule(payload):
         model.AddMaxEquality(used_var, building_vars)
         return used_var
 
-    for teacher in teachers:
-        teacher_item_ids = set(items_by_teacher[teacher["id"]])
-        for day, day_slots in slots_by_day.items():
-            for left_slot, right_slot in zip(day_slots, day_slots[1:]):
-                left_buildings = _collect_building_choice_vars(teacher_item_ids, left_slot["id"])
-                right_buildings = _collect_building_choice_vars(teacher_item_ids, right_slot["id"])
-                if not left_buildings or not right_buildings:
-                    continue
-                for left_building, left_vars in left_buildings.items():
-                    for right_building, right_vars in right_buildings.items():
-                        if left_building == right_building:
-                            continue
-                        left_used = _building_used_var(
-                            f"teacher_building_left__{teacher['id']}__{day}__{left_slot['hour']}",
-                            teacher_item_ids,
-                            left_slot["id"],
-                            left_building,
-                        )
-                        right_used = _building_used_var(
-                            f"teacher_building_right__{teacher['id']}__{day}__{right_slot['hour']}",
-                            teacher_item_ids,
-                            right_slot["id"],
-                            right_building,
-                        )
-                        if left_used is None or right_used is None:
-                            continue
-                        transition_var = model.NewBoolVar(
-                            f"teacher_building_transition__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
-                        )
-                        model.Add(transition_var <= left_used)
-                        model.Add(transition_var <= right_used)
-                        model.Add(transition_var >= left_used + right_used - 1)
-                        teacher_building_penalty_vars.append(transition_var)
-
-    for audience_key, audience_item_ids in audience_to_items.items():
-        item_id_set = set(audience_item_ids)
-        for day, day_slots in slots_by_day.items():
-            for left_index in range(len(day_slots)):
-                for right_index in range(left_index + 1, len(day_slots)):
-                    left_slot = day_slots[left_index]
-                    right_slot = day_slots[right_index]
-                    gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
-                    if gap_size <= 0:
+    if enable_building_transition_penalties:
+        for teacher in teachers:
+            teacher_item_ids = set(items_by_teacher[teacher["id"]])
+            for day, day_slots in slots_by_day.items():
+                for left_slot, right_slot in zip(day_slots, day_slots[1:]):
+                    left_buildings = _collect_building_choice_vars(teacher_item_ids, left_slot["id"])
+                    right_buildings = _collect_building_choice_vars(teacher_item_ids, right_slot["id"])
+                    if not left_buildings or not right_buildings:
                         continue
+                    for left_building, left_vars in left_buildings.items():
+                        for right_building, right_vars in right_buildings.items():
+                            if left_building == right_building:
+                                continue
+                            left_used = _building_used_var(
+                                f"teacher_building_left__{teacher['id']}__{day}__{left_slot['hour']}",
+                                teacher_item_ids,
+                                left_slot["id"],
+                                left_building,
+                            )
+                            right_used = _building_used_var(
+                                f"teacher_building_right__{teacher['id']}__{day}__{right_slot['hour']}",
+                                teacher_item_ids,
+                                right_slot["id"],
+                                right_building,
+                            )
+                            if left_used is None or right_used is None:
+                                continue
+                            transition_var = model.NewBoolVar(
+                                f"teacher_building_transition__{teacher['id']}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
+                            )
+                            model.Add(transition_var <= left_used)
+                            model.Add(transition_var <= right_used)
+                            model.Add(transition_var >= left_used + right_used - 1)
+                            teacher_building_penalty_vars.append(transition_var)
 
-                    left_vars = [
-                        use_slot_vars[(item_id, left_slot["id"])]
-                        for item_id in item_id_set
-                        if (item_id, left_slot["id"]) in use_slot_vars
-                    ]
-                    right_vars = [
-                        use_slot_vars[(item_id, right_slot["id"])]
-                        for item_id in item_id_set
-                        if (item_id, right_slot["id"]) in use_slot_vars
-                    ]
-                    if not left_vars or not right_vars:
-                        continue
+    if enable_gap_penalties or enable_building_transition_penalties:
+        for audience_key, audience_item_ids in audience_to_items.items():
+            item_id_set = set(audience_item_ids)
+            for day, day_slots in slots_by_day.items():
+                if enable_gap_penalties:
+                    for left_index in range(len(day_slots)):
+                        for right_index in range(left_index + 1, len(day_slots)):
+                            left_slot = day_slots[left_index]
+                            right_slot = day_slots[right_index]
+                            gap_size = int(right_slot["hour"]) - int(left_slot["hour"]) - 1
+                            if gap_size <= 0:
+                                continue
 
-                    left_used = model.NewBoolVar(
-                        f"aud_left_used__{audience_key}__{day}__{left_slot['hour']}"
-                    )
-                    right_used = model.NewBoolVar(
-                        f"aud_right_used__{audience_key}__{day}__{right_slot['hour']}"
-                    )
-                    model.AddMaxEquality(left_used, left_vars)
-                    model.AddMaxEquality(right_used, right_vars)
+                            left_vars = [
+                                use_slot_vars[(item_id, left_slot["id"])]
+                                for item_id in item_id_set
+                                if (item_id, left_slot["id"]) in use_slot_vars
+                            ]
+                            right_vars = [
+                                use_slot_vars[(item_id, right_slot["id"])]
+                                for item_id in item_id_set
+                                if (item_id, right_slot["id"]) in use_slot_vars
+                            ]
+                            if not left_vars or not right_vars:
+                                continue
 
-                    gap_var = model.NewBoolVar(
-                        f"aud_gap__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}"
-                    )
-                    model.Add(gap_var <= left_used)
-                    model.Add(gap_var <= right_used)
-                    model.Add(gap_var >= left_used + right_used - 1)
-                    audience_gap_penalty_vars.extend([gap_var] * gap_size)
+                            left_used = model.NewBoolVar(
+                                f"aud_left_used__{audience_key}__{day}__{left_slot['hour']}"
+                            )
+                            right_used = model.NewBoolVar(
+                                f"aud_right_used__{audience_key}__{day}__{right_slot['hour']}"
+                            )
+                            model.AddMaxEquality(left_used, left_vars)
+                            model.AddMaxEquality(right_used, right_vars)
 
-            for left_slot, right_slot in zip(day_slots, day_slots[1:]):
-                left_buildings = _collect_building_choice_vars(item_id_set, left_slot["id"])
-                right_buildings = _collect_building_choice_vars(item_id_set, right_slot["id"])
-                if not left_buildings or not right_buildings:
-                    continue
-                for left_building in left_buildings:
-                    for right_building in right_buildings:
-                        if left_building == right_building:
+                            gap_var = model.NewBoolVar(
+                                f"aud_gap__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}"
+                            )
+                            model.Add(gap_var <= left_used)
+                            model.Add(gap_var <= right_used)
+                            model.Add(gap_var >= left_used + right_used - 1)
+                            audience_gap_penalty_vars.extend([gap_var] * gap_size)
+
+                if enable_building_transition_penalties:
+                    for left_slot, right_slot in zip(day_slots, day_slots[1:]):
+                        left_buildings = _collect_building_choice_vars(item_id_set, left_slot["id"])
+                        right_buildings = _collect_building_choice_vars(item_id_set, right_slot["id"])
+                        if not left_buildings or not right_buildings:
                             continue
-                        left_used = _building_used_var(
-                            f"aud_building_left__{audience_key}__{day}__{left_slot['hour']}",
-                            item_id_set,
-                            left_slot["id"],
-                            left_building,
-                        )
-                        right_used = _building_used_var(
-                            f"aud_building_right__{audience_key}__{day}__{right_slot['hour']}",
-                            item_id_set,
-                            right_slot["id"],
-                            right_building,
-                        )
-                        if left_used is None or right_used is None:
-                            continue
-                        transition_var = model.NewBoolVar(
-                            f"aud_building_transition__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
-                        )
-                        model.Add(transition_var <= left_used)
-                        model.Add(transition_var <= right_used)
-                        model.Add(transition_var >= left_used + right_used - 1)
-                        audience_building_penalty_vars.append(transition_var)
+                        for left_building in left_buildings:
+                            for right_building in right_buildings:
+                                if left_building == right_building:
+                                    continue
+                                left_used = _building_used_var(
+                                    f"aud_building_left__{audience_key}__{day}__{left_slot['hour']}",
+                                    item_id_set,
+                                    left_slot["id"],
+                                    left_building,
+                                )
+                                right_used = _building_used_var(
+                                    f"aud_building_right__{audience_key}__{day}__{right_slot['hour']}",
+                                    item_id_set,
+                                    right_slot["id"],
+                                    right_building,
+                                )
+                                if left_used is None or right_used is None:
+                                    continue
+                                transition_var = model.NewBoolVar(
+                                    f"aud_building_transition__{audience_key}__{day}__{left_slot['hour']}__{right_slot['hour']}__{left_building}__{right_building}"
+                                )
+                                model.Add(transition_var <= left_used)
+                                model.Add(transition_var <= right_used)
+                                model.Add(transition_var >= left_used + right_used - 1)
+                                audience_building_penalty_vars.append(transition_var)
 
     objective_terms = []
     for (item_id, slot_id, room_id), var in decision_vars.items():
@@ -838,6 +847,8 @@ def optimize_schedule(payload):
         "audienceUsage": {audience_key: usage for audience_key, usage in audience_usage.items()},
         "precedenceRelations": precedence_relations,
         "preferLowerFloors": prefer_lower_floors,
+        "enableGapPenalties": enable_gap_penalties,
+        "enableBuildingTransitionPenalties": enable_building_transition_penalties,
         "maxClassesPerDayForTeacher": max_classes_per_day_for_teacher,
         "maxClassesPerDayForAudience": max_classes_per_day_for_audience,
         "preferSeparateSubgroupsByDay": prefer_separate_subgroups_by_day,
