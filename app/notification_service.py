@@ -3,6 +3,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
+from .auth_service import require_auth_user
 from .config import (
     EMAIL_NOTIFICATIONS_ENABLED,
     EMAIL_NOTIFY_STUDENTS,
@@ -17,6 +18,7 @@ from .config import (
     SMTP_USE_TLS,
 )
 from .db import query_all, query_one
+from .errors import ApiError
 
 
 logger = logging.getLogger(__name__)
@@ -245,8 +247,44 @@ def _send_email(recipient, subject, body):
         server.send_message(message)
 
 
+def send_test_email(headers, payload):
+    user = require_auth_user(headers)
+    if user["role"] != "admin":
+        raise ApiError(403, "forbidden", "Недостаточно прав")
+
+    if not notifications_configured():
+        raise ApiError(
+            400,
+            "bad_request",
+            "SMTP не настроен или email-уведомления отключены.",
+        )
+
+    target_email = str(payload.get("email") or SMTP_USER or user.get("email") or "").strip()
+    if not target_email:
+        raise ApiError(400, "fill_required_fields", "Заполните поля: email", {"fields": ["email"]})
+
+    subject = "Тестовое письмо TimeTableG"
+    body = "Это тестовая отправка email из системы TimeTableG. Если вы получили это письмо, SMTP настроен корректно."
+    recipient = {
+        "email": target_email,
+        "name": user.get("full_name") or user.get("displayName") or "Администратор",
+    }
+
+    try:
+        _send_email(recipient, subject, body)
+    except Exception as exc:
+        logger.exception("Failed to send test email to %s", target_email)
+        raise ApiError(400, "bad_request", f"Не удалось отправить тестовое письмо: {exc}") from exc
+
+    logger.info("Test email sent successfully to %s", target_email)
+    return {"success": True, "email": target_email}
+
+
 def send_schedule_change_notifications(connection, action, before_item=None, after_item=None):
     if not notifications_configured():
+        logger.info(
+            "Schedule change notifications skipped: SMTP is not fully configured or email notifications are disabled"
+        )
         return {"sent": 0, "skipped": True}
 
     recipients = {}
@@ -255,10 +293,22 @@ def send_schedule_change_notifications(connection, action, before_item=None, aft
             recipients[recipient["key"]] = recipient
 
     if not recipients:
+        logger.info(
+            "Schedule change notifications skipped: no recipients found for action=%s, before_schedule_id=%s, after_schedule_id=%s",
+            action,
+            before_item.get("id") if before_item else None,
+            after_item.get("id") if after_item else None,
+        )
         return {"sent": 0, "skipped": True}
 
     subject, body = _build_message(action, before_item, after_item)
     sent_count = 0
+    logger.info(
+        "Sending schedule change notifications: action=%s, recipients=%s, subject=%s",
+        action,
+        len(recipients),
+        subject,
+    )
 
     for recipient in recipients.values():
         try:
@@ -267,11 +317,20 @@ def send_schedule_change_notifications(connection, action, before_item=None, aft
         except Exception:
             logger.exception("Failed to send schedule change email to %s", recipient["email"])
 
+    logger.info(
+        "Schedule change notifications finished: action=%s, sent=%s, total_recipients=%s",
+        action,
+        sent_count,
+        len(recipients),
+    )
     return {"sent": sent_count, "skipped": False}
 
 
 def send_schedule_regeneration_notifications(connection, semester, year, before_items, after_items):
     if not notifications_configured():
+        logger.info(
+            "Schedule regeneration notifications skipped: SMTP is not fully configured or email notifications are disabled"
+        )
         return {"sent": 0, "skipped": True}
 
     recipients = {}
@@ -280,10 +339,22 @@ def send_schedule_regeneration_notifications(connection, semester, year, before_
             recipients[recipient["key"]] = recipient
 
     if not recipients:
+        logger.info(
+            "Schedule regeneration notifications skipped: no recipients found for semester=%s year=%s",
+            semester,
+            year,
+        )
         return {"sent": 0, "skipped": True}
 
     subject, body = _build_regeneration_message(semester, year, before_items, after_items)
     sent_count = 0
+    logger.info(
+        "Sending schedule regeneration notifications: semester=%s, year=%s, recipients=%s, subject=%s",
+        semester,
+        year,
+        len(recipients),
+        subject,
+    )
 
     for recipient in recipients.values():
         try:
@@ -292,4 +363,11 @@ def send_schedule_regeneration_notifications(connection, semester, year, before_
         except Exception:
             logger.exception("Failed to send regeneration email to %s", recipient["email"])
 
+    logger.info(
+        "Schedule regeneration notifications finished: semester=%s, year=%s, sent=%s, total_recipients=%s",
+        semester,
+        year,
+        sent_count,
+        len(recipients),
+    )
     return {"sent": sent_count, "skipped": False}

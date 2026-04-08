@@ -20,7 +20,7 @@ from .db import get_connection, query_all, query_one
 from .errors import ApiError
 from .import_service import generate_import_template, generate_schedule_export, import_excel_data
 from .job_store import create_schedule_generation_job, get_schedule_generation_job
-from .notification_service import send_schedule_change_notifications
+from .notification_service import send_schedule_change_notifications, send_test_email
 from .preference_service import (
     create_teacher_preference_request,
     list_teacher_preference_requests,
@@ -187,6 +187,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "schedule-export.xlsx",
                 )
+                return
+
+            if api_path == "/notifications/test-email" and method == "POST":
+                self.send_json(200, send_test_email(self.headers, self.read_json()))
                 return
 
             if api_path == "/admin/clear-all" and method == "POST":
