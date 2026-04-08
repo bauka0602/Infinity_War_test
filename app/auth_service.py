@@ -21,6 +21,8 @@ def normalize_language(value, default="ru"):
 
 
 def normalize_teaching_languages(value):
+    if value in (None, ""):
+        return []
     if isinstance(value, str):
         raw_values = value.split(",")
     else:
@@ -30,7 +32,7 @@ def normalize_teaching_languages(value):
         normalized = normalize_language(raw, "")
         if normalized and normalized not in seen:
             seen.append(normalized)
-    return seen or ["ru", "kk"]
+    return seen
 
 def _find_account_by_token(connection, token):
     admin = query_one(
@@ -175,6 +177,7 @@ def register_user(payload):
     subgroup = (payload.get("subgroup") or "").strip().upper()
     group_id = payload.get("groupId")
     student_language = normalize_language(payload.get("language"), "")
+    teaching_languages = normalize_teaching_languages(payload.get("teachingLanguages"))
     if role not in {"student", "teacher"}:
         raise ApiError(
             400,
@@ -198,6 +201,19 @@ def register_user(payload):
                 "fill_required_fields",
                 f"Заполните поля: {', '.join(student_missing)}",
                 {"fields": student_missing},
+            )
+    else:
+        teacher_missing = []
+        if not department:
+            teacher_missing.append("department")
+        if not teaching_languages:
+            teacher_missing.append("teachingLanguages")
+        if teacher_missing:
+            raise ApiError(
+                400,
+                "fill_required_fields",
+                f"Заполните поля: {', '.join(teacher_missing)}",
+                {"fields": teacher_missing},
             )
 
     selected_group = None
@@ -259,8 +275,6 @@ def register_user(payload):
                     "email_already_exists",
                     "Пользователь с таким email уже существует",
                 )
-
-            teaching_languages = normalize_teaching_languages(payload.get("teachingLanguages"))
             token = secrets.token_urlsafe(32)
             if role == "teacher":
                 if existing_teacher:
@@ -268,13 +282,14 @@ def register_user(payload):
                         connection,
                         """
                         UPDATE teachers
-                        SET name = ?, password = ?, token = ?, teaching_languages = ?
+                        SET name = ?, password = ?, token = ?, department = ?, teaching_languages = ?
                         WHERE id = ?
                         """,
                         (
                             payload["displayName"],
                             hash_password(payload["password"]),
                             token,
+                            department,
                             ",".join(teaching_languages),
                             existing_teacher["id"],
                         ),
@@ -296,7 +311,7 @@ def register_user(payload):
                             token,
                             None,
                             "",
-                            "",
+                            department,
                             None,
                             ",".join(teaching_languages),
                         ),
