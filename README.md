@@ -1,48 +1,85 @@
 # Backend
 
-Backend отвечает за:
+Этот backend уже приведён в совместимость с текущим frontend TimeTableG.
 
-- регистрацию и логин
-- роли пользователей
-- CRUD для `courses`, `teachers`, `rooms`, `schedules`
-- генерацию расписания
-- работу с SQLite/PostgreSQL
+Что поддерживается:
 
-## Точка входа
+- авторизация и профиль
+- роли `admin`, `teacher`, `student`
+- хранение ролей по таблицам:
+  - `users` - только `admin`
+  - `teachers` - преподаватели
+  - `students` - студенты
+- CRUD для:
+  - `courses` / `disciplines`
+  - `teachers`
+  - `rooms`
+  - `groups`
+  - `sections`
+  - `schedules`
+- генерация расписания
+- импорт Excel
+- скачивание Excel-шаблона
+- экспорт расписания в Excel
+- SQLite локально и PostgreSQL в production
 
-Запуск:
+## Запуск
 
 ```bash
 python3 backend/server.py
 ```
 
+Если запускаешь из папки `backend`:
+
+```bash
+python3 server.py
+```
+
 ## Структура
 
-- `server.py` - запуск backend
-- `app/config.py` - конфиг и env
-- `app/db.py` - база данных
-- `app/auth_service.py` - логин и регистрация
-- `app/collections.py` - CRUD сущностей
-- `app/scheduling.py` - алгоритм составления расписания
+- `server.py` - точка входа
+- `app/config.py` - env и конфигурация
+- `app/db.py` - схема, миграции, подключение к БД
+- `app/auth_service.py` - регистрация, логин, профиль
+- `app/collections.py` - CRUD и фильтрация данных
+- `app/import_service.py` - импорт/экспорт Excel
+- `app/scheduling.py` - генерация расписания
 - `app/http_handler.py` - HTTP API
+- `app/admin_service.py` - очистка данных
 
-Полное описание по файлам:
+## Основные API
 
-- `backend/ARCHITECTURE.md`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/profile`
+- `POST /api/profile/avatar`
+- `GET /api/disciplines`
+- `GET /api/teachers`
+- `GET /api/rooms`
+- `GET /api/groups`
+- `GET /api/sections`
+- `GET /api/schedules`
+- `POST /api/schedules/generate`
+- `GET /api/import/template`
+- `POST /api/import/excel`
+- `GET /api/export/schedule`
+- `POST /api/admin/clear-all`
 
 ## База данных
 
-### Локально
-
-Если `DATABASE_URL` не указан, используется SQLite:
+Локально без `DATABASE_URL` используется SQLite:
 
 ```text
 backend/data/timetable.db
 ```
 
-### Production
+В production при наличии `DATABASE_URL` используется PostgreSQL.
 
-Если `DATABASE_URL` указан, используется PostgreSQL.
+При старте backend:
+
+- создаёт таблицы автоматически
+- делает rename/add column миграции
+- переносит старые `teacher`/`student` аккаунты из `users` в `teachers`/`students`
 
 ## Переменные окружения
 
@@ -53,25 +90,19 @@ PORT=8000
 ALLOWED_ORIGINS=http://localhost:5173
 DATABASE_URL=
 SQLITE_DB_FILE=backend/data/timetable.db
+TEACHER_EMAIL_DOMAIN=@kazatu.edu.kz
 ```
 
-## Роли
+## Зависимости
 
-- `admin`
-- `teacher`
-- `student`
+```bash
+pip install -r backend/requirements.txt
+```
 
-## Регистрация
+Сейчас backend использует:
 
-- `admin` нельзя зарегистрировать публично
-- `teacher` регистрируется только с email `@kazatu.edu.kz`
-- `student` регистрируется с любым email
-
-## Тестовые аккаунты
-
-- `admin@kazatu.edu.kz` / `admin123`
-- `teacher@kazatu.edu.kz` / `teacher123`
-- `student@university.kz` / `student123`
+- `psycopg[binary]`
+- `openpyxl`
 
 ## Проверка
 

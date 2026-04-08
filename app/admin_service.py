@@ -27,6 +27,10 @@ def clear_collection_data(headers, collection):
             elif collection == "groups":
                 db_execute(connection, "DELETE FROM schedules")
                 db_execute(connection, "DELETE FROM sections")
+                db_execute(
+                    connection,
+                    "UPDATE students SET group_id = NULL, group_name = '', subgroup = ''",
+                )
             elif collection in {"teachers", "rooms"}:
                 db_execute(connection, "DELETE FROM schedules")
             db_execute(connection, f"DELETE FROM {collection}")
