@@ -58,6 +58,7 @@ def _serialize_claimable_teacher(row):
     return {
         "id": row["id"],
         "name": row["name"],
+        "email": email,
         "maskedEmail": f"{masked_local}@{domain}" if domain else masked_local,
         "teachingLanguages": row.get("teaching_languages", "") or "ru,kk",
     }
