@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from .config import DB_LOCK, TEACHER_EMAIL_DOMAIN
+from .config import DB_LOCK, EXPOSE_DEV_CLAIM_CODE, TEACHER_EMAIL_DOMAIN
 from .db import db_execute, get_connection, insert_and_get_id, query_all, query_one
 from .errors import ApiError
 from .security import hash_password, parse_bearer_token, sanitize_user, verify_password
@@ -49,11 +49,16 @@ def _is_teacher_claimed(teacher):
 
 
 def _serialize_claimable_teacher(row):
+    email = row["email"]
+    local_part, _, domain = email.partition("@")
+    if len(local_part) <= 2:
+        masked_local = local_part[:1] + "*"
+    else:
+        masked_local = local_part[:2] + "*" * max(1, len(local_part) - 2)
     return {
         "id": row["id"],
         "name": row["name"],
-        "email": row["email"],
-        "department": row.get("department", ""),
+        "maskedEmail": f"{masked_local}@{domain}" if domain else masked_local,
         "teachingLanguages": row.get("teaching_languages", "") or "ru,kk",
     }
 
@@ -131,6 +136,18 @@ def _find_teacher_by_id(connection, teacher_id):
             id, email, password, token, name, phone, department, weekly_hours_limit,
             avatar_data, teaching_languages, claim_code, claim_code_expires_at, claim_requested_at
         FROM teachers
+        WHERE id = ?
+        """,
+        (teacher_id,),
+    )
+
+
+def _clear_teacher_claim_state(connection, teacher_id):
+    db_execute(
+        connection,
+        """
+        UPDATE teachers
+        SET claim_code = NULL, claim_code_expires_at = NULL, claim_requested_at = NULL
         WHERE id = ?
         """,
         (teacher_id,),
@@ -301,12 +318,14 @@ def register_user(payload):
                 else:
                     subgroup = ""
 
-            if _email_exists(connection, email) and not (
-                role == "teacher"
-                and existing_teacher
-                and not existing_teacher.get("password")
-                and not existing_teacher.get("token")
-            ):
+            if role == "teacher" and existing_teacher and not _is_teacher_claimed(existing_teacher):
+                raise ApiError(
+                    400,
+                    "teacher_claim_required",
+                    "Для импортированного преподавателя нужно подтвердить аккаунт через поиск и код.",
+                )
+
+            if _email_exists(connection, email):
                 raise ApiError(
                     400,
                     "email_already_exists",
@@ -314,45 +333,26 @@ def register_user(payload):
                 )
             token = secrets.token_urlsafe(32)
             if role == "teacher":
-                if existing_teacher:
-                    db_execute(
-                        connection,
-                        """
-                        UPDATE teachers
-                        SET name = ?, password = ?, token = ?, department = ?, teaching_languages = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            payload["displayName"],
-                            hash_password(payload["password"]),
-                            token,
-                            department,
-                            ",".join(teaching_languages),
-                            existing_teacher["id"],
-                        ),
+                user_id = insert_and_get_id(
+                    connection,
+                    """
+                    INSERT INTO teachers (
+                        name, email, password, token, avatar_data, phone, department, weekly_hours_limit, teaching_languages
                     )
-                    user_id = existing_teacher["id"]
-                else:
-                    user_id = insert_and_get_id(
-                        connection,
-                        """
-                        INSERT INTO teachers (
-                            name, email, password, token, avatar_data, phone, department, weekly_hours_limit, teaching_languages
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            payload["displayName"],
-                            email,
-                            hash_password(payload["password"]),
-                            token,
-                            None,
-                            "",
-                            department,
-                            None,
-                            ",".join(teaching_languages),
-                        ),
-                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload["displayName"],
+                        email,
+                        hash_password(payload["password"]),
+                        token,
+                        None,
+                        "",
+                        department,
+                        None,
+                        ",".join(teaching_languages),
+                    ),
+                )
                 user = query_one(
                     connection,
                     """
@@ -492,29 +492,63 @@ def login_user(payload):
     return sanitize_user(user)
 
 
+def logout_user(headers):
+    user = require_auth_user(headers)
+
+    with DB_LOCK:
+        with get_connection() as connection:
+            if user["role"] == "admin":
+                db_execute(connection, "UPDATE users SET token = '' WHERE id = ?", (user["id"],))
+            elif user["role"] == "teacher":
+                db_execute(connection, "UPDATE teachers SET token = '' WHERE id = ?", (user["id"],))
+            else:
+                db_execute(connection, "UPDATE students SET token = '' WHERE id = ?", (user["id"],))
+            connection.commit()
+
+    return {"success": True}
+
+
 def search_claimable_teachers(query_value):
     search = str(query_value or "").strip().lower()
-    if len(search) < 2:
+    if len(search) < 3:
         return []
 
-    pattern = f"%{search}%"
+    tokens = [token for token in search.split() if token]
+    if not tokens:
+        return []
+
+    where_parts = [
+        """
+        COALESCE(password, '') = ''
+          AND COALESCE(token, '') = ''
+        """
+    ]
+    params = []
+    for token in tokens:
+        where_parts.append(
+            """
+            (
+              lower(name) LIKE ?
+              OR lower(email) LIKE ?
+              OR lower(COALESCE(name, '') || ' ' || COALESCE(email, '')) LIKE ?
+            )
+            """
+        )
+        pattern = f"%{token}%"
+        params.extend([pattern, pattern, pattern])
+
     with DB_LOCK:
         with get_connection() as connection:
             rows = query_all(
                 connection,
-                """
-                SELECT id, name, email, department, teaching_languages
+                f"""
+                SELECT id, name, email, teaching_languages
                 FROM teachers
-                WHERE COALESCE(password, '') = ''
-                  AND COALESCE(token, '') = ''
-                  AND (
-                    lower(name) LIKE ?
-                    OR lower(email) LIKE ?
-                  )
+                WHERE {' AND '.join(where_parts)}
                 ORDER BY name, id
                 LIMIT 10
                 """,
-                (pattern, pattern),
+                tuple(params),
             )
     return [_serialize_claimable_teacher(row) for row in rows]
 
@@ -568,9 +602,8 @@ def request_teacher_claim(payload):
     return {
         "success": True,
         "teacherId": int(teacher_id),
-        "email": email,
         "expiresAt": expires_at,
-        "debugCode": claim_code,
+        "debugCode": claim_code if EXPOSE_DEV_CLAIM_CODE else None,
     }
 
 
@@ -632,6 +665,8 @@ def confirm_teacher_claim(payload):
                 )
             expires_at = datetime.fromisoformat(expires_at_raw)
             if expires_at < _utc_now():
+                _clear_teacher_claim_state(connection, teacher["id"])
+                connection.commit()
                 raise ApiError(
                     400,
                     "teacher_claim_code_expired",

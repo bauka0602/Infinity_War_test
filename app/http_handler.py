@@ -9,6 +9,7 @@ from .auth_service import (
     confirm_teacher_claim,
     get_current_profile,
     login_user,
+    logout_user,
     request_teacher_claim,
     register_user,
     require_auth_user,
@@ -133,7 +134,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
 
             if api_path == "/auth/logout" and method == "POST":
-                self.send_json(200, {"success": True})
+                self.send_json(200, logout_user(self.headers))
                 return
 
             if api_path == "/profile" and method == "GET":
