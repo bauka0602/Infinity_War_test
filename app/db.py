@@ -117,6 +117,33 @@ def rename_column(connection, table_name, old_name, new_name):
     )
 
 
+def seed_default_groups_if_missing(connection):
+    existing_groups = query_scalar(connection, "SELECT COUNT(*) FROM groups") or 0
+    if existing_groups:
+        return False
+
+    default_groups = default_store().get("groups", [])
+    if not default_groups:
+        return False
+
+    for group in default_groups:
+        db_execute(
+            connection,
+            """
+            INSERT INTO groups (name, student_count, has_subgroups, language, study_course)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                group.get("name"),
+                group.get("student_count"),
+                group.get("has_subgroups", 0),
+                group.get("language", "ru"),
+                group.get("study_course"),
+            ),
+        )
+    return True
+
+
 def seed_from_store(connection, store):
     for user in store["users"]:
         db_execute(
@@ -836,4 +863,6 @@ def ensure_database():
             if DB_ENGINE == "sqlite" and migrate_legacy_json(connection):
                 return
             seed_from_store(connection, default_store())
+            connection.commit()
+        elif (counts.get("groups") or 0) == 0 and seed_default_groups_if_missing(connection):
             connection.commit()
