@@ -289,6 +289,63 @@ def update_teacher_preference_status(headers, request_id, payload):
     return _serialize_request(updated)
 
 
+def delete_teacher_preference_request(headers, request_id):
+    user = require_auth_user(headers)
+    _ensure_admin(user)
+
+    with DB_LOCK:
+        with get_connection() as connection:
+            existing = query_one(
+                connection,
+                """
+                SELECT
+                    r.id,
+                    r.teacher_id,
+                    r.teacher_name,
+                    t.email AS teacher_email,
+                    r.preferred_day,
+                    r.preferred_hour,
+                    r.note,
+                    r.status,
+                    r.admin_comment,
+                    r.created_at,
+                    r.updated_at
+                FROM teacher_preference_requests r
+                JOIN teachers t ON t.id = r.teacher_id
+                WHERE r.id = ?
+                """,
+                (request_id,),
+            )
+            if existing is None:
+                raise ApiError(404, "record_not_found", "Запрос преподавателя не найден.")
+
+            db_execute(
+                connection,
+                "DELETE FROM teacher_preference_requests WHERE id = ?",
+                (request_id,),
+            )
+            connection.commit()
+
+    return {"deleted": True, "item": _serialize_request(existing)}
+
+
+def delete_all_teacher_preference_requests(headers):
+    user = require_auth_user(headers)
+    _ensure_admin(user)
+
+    with DB_LOCK:
+        with get_connection() as connection:
+            row = query_one(
+                connection,
+                "SELECT COUNT(*) AS total FROM teacher_preference_requests",
+            )
+            total = int(row["total"] or 0) if row else 0
+            db_execute(connection, "DELETE FROM teacher_preference_requests")
+            connection.commit()
+
+    return {"deleted": True, "count": total}
+
+
 def get_approved_teacher_preferences(connection):
     return query_all(
         connection,

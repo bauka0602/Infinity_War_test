@@ -33,6 +33,8 @@ from .notification_service import (
 )
 from .preference_service import (
     create_teacher_preference_request,
+    delete_all_teacher_preference_requests,
+    delete_teacher_preference_request,
     list_teacher_preference_requests,
     update_teacher_preference_status,
 )
@@ -179,12 +181,21 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.send_json(201, create_teacher_preference_request(self.headers, self.read_json()))
                 return
 
+            if api_path == "/teacher-preferences" and method == "DELETE":
+                self.send_json(200, delete_all_teacher_preference_requests(self.headers))
+                return
+
             if api_path.startswith("/teacher-preferences/") and api_path.endswith("/status") and method == "PUT":
                 request_id = api_path.split("/")[-2]
                 self.send_json(
                     200,
                     update_teacher_preference_status(self.headers, int(request_id), self.read_json()),
                 )
+                return
+
+            if api_path.startswith("/teacher-preferences/") and method == "DELETE":
+                request_id = api_path.rsplit("/", 1)[-1]
+                self.send_json(200, delete_teacher_preference_request(self.headers, int(request_id)))
                 return
 
             if api_path == "/public/groups" and method == "GET":
