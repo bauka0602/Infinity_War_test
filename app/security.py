@@ -20,6 +20,7 @@ def sanitize_user(row):
     return {
         "id": row["id"],
         "email": row["email"],
+        "phone": row.get("phone", ""),
         "displayName": row.get("full_name") or row.get("name") or "",
         "role": row["role"],
         "token": row["token"],

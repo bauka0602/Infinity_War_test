@@ -68,7 +68,7 @@ def _find_account_by_token(connection, token):
     admin = query_one(
         connection,
         """
-        SELECT id, email, full_name, role, token, avatar_data, department, programme, group_id, group_name, subgroup, '' AS language, '' AS teaching_languages
+        SELECT id, email, '' AS phone, full_name, role, token, avatar_data, department, programme, group_id, group_name, subgroup, '' AS language, '' AS teaching_languages
         FROM users
         WHERE role = 'admin' AND token = ?
         """,
@@ -81,7 +81,7 @@ def _find_account_by_token(connection, token):
         connection,
         """
         SELECT
-            id, email, name AS full_name, 'teacher' AS role, token, avatar_data,
+            id, email, phone, name AS full_name, 'teacher' AS role, token, avatar_data,
             department, '' AS programme, NULL AS group_id, '' AS group_name, '' AS subgroup, '' AS language, teaching_languages
         FROM teachers
         WHERE token = ?
@@ -95,7 +95,7 @@ def _find_account_by_token(connection, token):
         connection,
         """
         SELECT
-            id, email, name AS full_name, 'student' AS role, token, avatar_data,
+            id, email, '' AS phone, name AS full_name, 'student' AS role, token, avatar_data,
             department, programme, group_id, group_name, subgroup, language, '' AS teaching_languages
         FROM students
         WHERE token = ?
@@ -162,7 +162,7 @@ def _find_login_account(connection, email, selected_role):
         return query_one(
             connection,
             """
-            SELECT id, email, password, full_name, role, token, avatar_data, department, programme, group_id, group_name, subgroup, '' AS language, '' AS teaching_languages
+            SELECT id, email, '' AS phone, password, full_name, role, token, avatar_data, department, programme, group_id, group_name, subgroup, '' AS language, '' AS teaching_languages
             FROM users
             WHERE role = 'admin' AND lower(email) = lower(?)
             """,
@@ -173,7 +173,7 @@ def _find_login_account(connection, email, selected_role):
             connection,
             """
             SELECT
-                id, email, password, name AS full_name, 'teacher' AS role, token, avatar_data,
+                id, email, phone, password, name AS full_name, 'teacher' AS role, token, avatar_data,
                 department, '' AS programme, NULL AS group_id, '' AS group_name, '' AS subgroup, '' AS language, teaching_languages
             FROM teachers
             WHERE lower(email) = lower(?)
@@ -185,7 +185,7 @@ def _find_login_account(connection, email, selected_role):
             connection,
             """
             SELECT
-                id, email, password, name AS full_name, 'student' AS role, token, avatar_data,
+                id, email, '' AS phone, password, name AS full_name, 'student' AS role, token, avatar_data,
                 department, programme, group_id, group_name, subgroup, language, '' AS teaching_languages
             FROM students
             WHERE lower(email) = lower(?)
@@ -228,6 +228,7 @@ def register_user(payload):
 
     role = (payload.get("role") or "student").strip().lower()
     email = payload["email"].strip()
+    phone = (payload.get("phone") or "").strip()
     department = (payload.get("department") or "").strip()
     programme_name = (payload.get("programmeName") or "").strip()
     subgroup = (payload.get("subgroup") or "").strip().upper()
@@ -260,6 +261,8 @@ def register_user(payload):
             )
     else:
         teacher_missing = []
+        if not phone:
+            teacher_missing.append("phone")
         if not department:
             teacher_missing.append("department")
         if not teaching_languages:
@@ -349,7 +352,7 @@ def register_user(payload):
                         hash_password(payload["password"]),
                         token,
                         None,
-                        "",
+                        phone,
                         department,
                         None,
                         ",".join(teaching_languages),
@@ -359,7 +362,7 @@ def register_user(payload):
                     connection,
                     """
                     SELECT
-                        id, email, name AS full_name, 'teacher' AS role, token, avatar_data,
+                        id, email, phone, name AS full_name, 'teacher' AS role, token, avatar_data,
                         department, '' AS programme, NULL AS group_id, '' AS group_name, '' AS subgroup, '' AS language, teaching_languages
                     FROM teachers
                     WHERE id = ?
@@ -393,7 +396,7 @@ def register_user(payload):
                     connection,
                     """
                     SELECT
-                        id, email, name AS full_name, 'student' AS role, token, avatar_data,
+                        id, email, '' AS phone, name AS full_name, 'student' AS role, token, avatar_data,
                         department, programme, group_id, group_name, subgroup, language, '' AS teaching_languages
                     FROM students
                     WHERE id = ?
@@ -532,9 +535,9 @@ def search_claimable_teachers(query_value):
     search_clauses = []
     for pattern in search_patterns:
         search_clauses.append(
-            "(lower(name) LIKE ? OR lower(email) LIKE ? OR lower(COALESCE(name, '') || ' ' || COALESCE(email, '')) LIKE ?)"
+            "(lower(name) LIKE ? OR lower(email) LIKE ? OR lower(COALESCE(phone, '')) LIKE ? OR lower(COALESCE(name, '') || ' ' || COALESCE(email, '') || ' ' || COALESCE(phone, '')) LIKE ?)"
         )
-        params.extend([pattern, pattern, pattern])
+        params.extend([pattern, pattern, pattern, pattern])
     where_parts.append(f"({' OR '.join(search_clauses)})")
 
     with DB_LOCK:
@@ -542,7 +545,7 @@ def search_claimable_teachers(query_value):
             rows = query_all(
                 connection,
                 f"""
-                SELECT id, name, email, teaching_languages
+                SELECT id, name, email, phone, teaching_languages
                 FROM teachers
                 WHERE {' AND '.join(where_parts)}
                 ORDER BY name, id
